@@ -619,115 +619,115 @@ pub const Database = struct {
     }
 };
 
-pub fn main() !void {
-    //----------------------------------------------------------------------
-    // Allocator
-    //----------------------------------------------------------------------
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+// pub fn main() !void {
+//     //----------------------------------------------------------------------
+//     // Allocator
+//     //----------------------------------------------------------------------
+//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+//     defer _ = gpa.deinit();
+//     const alloc = gpa.allocator();
 
-    //----------------------------------------------------------------------
-    // Prepare a fresh log file
-    //----------------------------------------------------------------------
-    const log_path = "my_kv_store.log";
-    std.fs.cwd().deleteFile(log_path) catch {};
-    const conn = try ConnectionString.parse(alloc, "file=my_kv_store.log;mode=read_write");
-    defer conn.deinit(alloc);
+//     //----------------------------------------------------------------------
+//     // Prepare a fresh log file
+//     //----------------------------------------------------------------------
+//     const log_path = "my_kv_store.log";
+//     std.fs.cwd().deleteFile(log_path) catch {};
+//     const conn = try ConnectionString.parse(alloc, "file=my_kv_store.log;mode=read_write");
+//     defer conn.deinit(alloc);
 
-    //----------------------------------------------------------------------
-    // 1. Open DB, do basic ops
-    //----------------------------------------------------------------------
-    {
-        var db = try Database.init(alloc, conn);
-        defer db.deinit();
+//     //----------------------------------------------------------------------
+//     // 1. Open DB, do basic ops
+//     //----------------------------------------------------------------------
+//     {
+//         var db = try Database.init(alloc, conn);
+//         defer db.deinit();
 
-        std.debug.print("\n--- BASIC OPS ---\n", .{});
+//         std.debug.print("\n--- BASIC OPS ---\n", .{});
 
-        try db.set("name", "Deondre");
-        try db.set("occupation", "Engineer");
-        try db.set("language", "Zig");
+//         try db.set("name", "Deondre");
+//         try db.set("occupation", "Engineer");
+//         try db.set("language", "Zig");
 
-        std.debug.print("name       = {s}\n", .{db.get("name").?});
-        std.debug.print("occupation = {s}\n", .{db.get("occupation").?});
-        std.debug.print("language   = {s}\n\n", .{db.get("language").?});
+//         std.debug.print("name       = {s}\n", .{db.get("name").?});
+//         std.debug.print("occupation = {s}\n", .{db.get("occupation").?});
+//         std.debug.print("language   = {s}\n\n", .{db.get("language").?});
 
-        // delete
-        _ = try db.del("occupation");
-        std.debug.print("After delete, occupation = {?s}\n\n", .{db.get("occupation")});
+//         // delete
+//         _ = try db.del("occupation");
+//         std.debug.print("After delete, occupation = {?s}\n\n", .{db.get("occupation")});
 
-        //------------------------------------------------------------------
-        // 2. Transaction – rollback
-        //------------------------------------------------------------------
-        try db.beginTransaction();
-        try db.set("name", "ChangedInTx");
-        try db.set("city", "Dallas");
-        std.debug.print("TX (before rollback) name={s}, city={s}\n", .{ db.get("name").?, db.get("city").? });
-        db.rollback();
-        std.debug.print("After rollback, name={s}, city={?s}\n\n", .{ db.get("name").?, db.get("city") });
+//         //------------------------------------------------------------------
+//         // 2. Transaction – rollback
+//         //------------------------------------------------------------------
+//         try db.beginTransaction();
+//         try db.set("name", "ChangedInTx");
+//         try db.set("city", "Dallas");
+//         std.debug.print("TX (before rollback) name={s}, city={s}\n", .{ db.get("name").?, db.get("city").? });
+//         db.rollback();
+//         std.debug.print("After rollback, name={s}, city={?s}\n\n", .{ db.get("name").?, db.get("city") });
 
-        //------------------------------------------------------------------
-        // 3. Transaction – commit
-        //------------------------------------------------------------------
-        try db.beginTransaction();
-        try db.set("language", "Awesome Zig");
-        try db.set("hobby", "Music");
-        db.commit() catch unreachable;
+//         //------------------------------------------------------------------
+//         // 3. Transaction – commit
+//         //------------------------------------------------------------------
+//         try db.beginTransaction();
+//         try db.set("language", "Awesome Zig");
+//         try db.set("hobby", "Music");
+//         db.commit() catch unreachable;
 
-        std.debug.print("After commit, language={s}, hobby={s}\n\n", .{ db.get("language").?, db.get("hobby").? });
-        // db goes out of scope and is flushed/closed by defer
-    }
+//         std.debug.print("After commit, language={s}, hobby={s}\n\n", .{ db.get("language").?, db.get("hobby").? });
+//         // db goes out of scope and is flushed/closed by defer
+//     }
 
-    //----------------------------------------------------------------------
-    // 4. Re-open DB to prove durability
-    //----------------------------------------------------------------------
-    {
-        const conn2 = try ConnectionString.parse(alloc, "file=my_kv_store.log;mode=read_write");
-        defer conn2.deinit(alloc);
+//     //----------------------------------------------------------------------
+//     // 4. Re-open DB to prove durability
+//     //----------------------------------------------------------------------
+//     {
+//         const conn2 = try ConnectionString.parse(alloc, "file=my_kv_store.log;mode=read_write");
+//         defer conn2.deinit(alloc);
 
-        var db = try Database.init(alloc, conn2);
-        defer db.deinit();
+//         var db = try Database.init(alloc, conn2);
+//         defer db.deinit();
 
-        std.debug.print("--- RECOVERY ---\n", .{});
-        std.debug.print("name       = {s}\n", .{db.get("name").?});
-        std.debug.print("occupation = {?s}\n", .{db.get("occupation")});
-        std.debug.print("language   = {s}\n", .{db.get("language").?});
-        std.debug.print("hobby      = {?s}\n", .{db.get("hobby")});
-        std.debug.print("city       = {?s}\n", .{db.get("city")});
-    }
+//         std.debug.print("--- RECOVERY ---\n", .{});
+//         std.debug.print("name       = {s}\n", .{db.get("name").?});
+//         std.debug.print("occupation = {?s}\n", .{db.get("occupation")});
+//         std.debug.print("language   = {s}\n", .{db.get("language").?});
+//         std.debug.print("hobby      = {?s}\n", .{db.get("hobby")});
+//         std.debug.print("city       = {?s}\n", .{db.get("city")});
+//     }
 
-    //----------------------------------------------------------------------
-    // 5. LIST OPERATIONS
-    //----------------------------------------------------------------------
-    {
-        const conn3 = try ConnectionString.parse(alloc, "file=my_kv_store.log;mode=read_write");
-        defer conn3.deinit(alloc);
+//     //----------------------------------------------------------------------
+//     // 5. LIST OPERATIONS
+//     //----------------------------------------------------------------------
+//     {
+//         const conn3 = try ConnectionString.parse(alloc, "file=my_kv_store.log;mode=read_write");
+//         defer conn3.deinit(alloc);
 
-        var db = try Database.init(alloc, conn3);
-        defer db.deinit();
+//         var db = try Database.init(alloc, conn3);
+//         defer db.deinit();
 
-        std.debug.print("\n--- LIST OPS ---\n", .{});
+//         std.debug.print("\n--- LIST OPS ---\n", .{});
 
-        try db.lpush("mylist", "a");
-        try db.lpush("mylist", "b");
-        try db.lpush("mylist", "c");
+//         try db.lpush("mylist", "a");
+//         try db.lpush("mylist", "b");
+//         try db.lpush("mylist", "c");
 
-        const before = db.lrange("mylist", 0, 10);
-        std.debug.print("mylist before pop:\n", .{});
-        for (before) |v| std.debug.print("  - {s}\n", .{v});
+//         const before = db.lrange("mylist", 0, 10);
+//         std.debug.print("mylist before pop:\n", .{});
+//         for (before) |v| std.debug.print("  - {s}\n", .{v});
 
-        const popped = try db.lpop("mylist");
-        if (popped) |p| {
-            std.debug.print("LPOP -> {s}\n", .{p});
-            db.allocator.free(p);
-        }
+//         const popped = try db.lpop("mylist");
+//         if (popped) |p| {
+//             std.debug.print("LPOP -> {s}\n", .{p});
+//             db.allocator.free(p);
+//         }
 
-        const after = db.lrange("mylist", 0, 10);
-        std.debug.print("mylist after pop:\n", .{});
-        for (after) |v| std.debug.print("  - {s}\n", .{v});
-    }
-}
+//         const after = db.lrange("mylist", 0, 10);
+//         std.debug.print("mylist after pop:\n", .{});
+//         for (after) |v| std.debug.print("  - {s}\n", .{v});
+//     }
+// }
 
-fn cleanupTestFile(file_path: []const u8) void {
-    std.fs.cwd().deleteFile(file_path) catch {};
-}
+// fn cleanupTestFile(file_path: []const u8) void {
+//     std.fs.cwd().deleteFile(file_path) catch {};
+// }
