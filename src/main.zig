@@ -130,9 +130,41 @@ const LogEntry = union(OperationType) {
                     },
                 };
             },
-            .ListPush => |lp| {
+            .ListPush => {
                 var int_buf: [4]u8 = undefined;
-                _ = file.readAll(&int_buf);
+                _ = try file.readAll(&int_buf);
+                const key_len = std.mem.readInt(u32, &int_buf, .little);
+                const key_buf = try allocator.alloc(u8, key_len);
+                errdefer allocator.free(key_buf);
+                _ = try file.readAll(key_buf);
+
+                _ = try file.readAll(&int_buf);
+                const val_len = std.mem.readInt(u32, &int_buf, .little);
+                const val_buf = try allocator.alloc(u8, val_len);
+                errdefer allocator.free(val_buf);
+                _ = try file.readAll(val_buf);
+
+                return LogEntry{ .ListPush = .{
+                    .key_len = key_len,
+                    .key = key_buf,
+                    .value_len = val_len,
+                    .value = val_buf,
+                } };
+            },
+            .ListPop => {
+                var int_buf: [4]u8 = undefined;
+                _ = try file.readAll(&int_buf);
+                const key_len = std.mem.readInt(u32, &int_buf, .little);
+                const key_buf = try allocator.alloc(u8, key_len);
+                errdefer allocator.free(key_buf);
+                _ = try file.readAll(key_buf);
+
+                return LogEntry{
+                    .ListPop = .{
+                        .key_len = key_len,
+                        .key = key_buf,
+                    },
+                };
             },
         }
     }
@@ -157,8 +189,21 @@ const LogEntry = union(OperationType) {
                     "-",
                 });
             },
+            .ListPush => |lp| {
+                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
+                    "ListPush",
+                    lp.key,
+                    lp.value,
+                });
+            },
+            .ListPop => |lp| {
+                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
+                    "ListPop",
+                    lp.key,
+                    "-",
+                });
+            },
         }
-
         std.debug.print("+-----------+---------------+-----------------------+\n", .{});
     }
 };
@@ -319,6 +364,29 @@ pub const Database = struct {
                         // Free the temporary key buffer since we don't need it
                         db.allocator.free(d_entry.key);
                     },
+                    .ListPush => |lp_entry| {
+                        var list = db.lists.getPtr(lp_entry.key) orelse blk: {
+                            const new_list = std.ArrayList([]const u8).init(db.allocator);
+                            try db.lists.put(
+                                try db.allocator.dupe(u8, lp_entry.key),
+                                new_list,
+                            );
+                            break :blk db.lists.getPtr(lp_entry.key).?;
+                        };
+                        const val_copy = try db.allocator.dupe(u8, lp_entry.value);
+                        try list.insert(0, val_copy);
+                        db.allocator.free(lp_entry.key);
+                        db.allocator.free(lp_entry.value);
+                    },
+                    .ListPop => |lp_entry| {
+                        if (db.lists.getPtr(lp_entry.key)) |list| {
+                            if (list.items.len > 0) {
+                                const removed = list.orderedRemove(0);
+                                db.allocator.free(removed);
+                            }
+                        }
+                        db.allocator.free(lp_entry.key);
+                    },
                 }
             }
         }
@@ -360,6 +428,63 @@ pub const Database = struct {
         self.map.deinit();
         self.log_file.close();
         self.allocator.free(self.file_path);
+    }
+
+    pub fn lpush(self: *Database, key: []const u8, value: []const u8) !void {
+        const log_entry = LogEntry{
+            .ListPush = .{
+                .key_len = @intCast(key.len),
+                .key = key,
+                .value_len = @intCast(value.len),
+                .value = value,
+            },
+        };
+
+        try log_entry.serialize(self.log_file);
+        try self.log_file.sync();
+
+        var list = self.lists.getPtr(key) orelse blk: {
+            const new_list = std.ArrayList([]const u8).init(self.allocator);
+            try self.lists.put(try self.allocator.dupe(u8, key), new_list);
+            break :blk self.lists.getPtr(key).?;
+        };
+
+        const val_copy = try self.allocator.dupe(u8, value);
+        try list.insert(0, val_copy);
+        log_entry.printTable();
+    }
+
+    pub fn lpop(self: *Database, key: []const u8) !?[]const u8 {
+        const list_ptr = self.lists.getPtr(key) orelse return null;
+        if (list_ptr.items.len == 0) return null;
+
+        const popped = list_ptr.orderedRemove(0);
+
+        const log_entry = LogEntry{
+            .ListPop = .{
+                .key_len = @intCast(key.len),
+                .key = key,
+            },
+        };
+        try log_entry.serialize(self.log_file);
+        try self.log_file.sync();
+
+        log_entry.printTable();
+        return popped;
+    }
+
+    pub fn lrange(
+        self: *Database,
+        key: []const u8,
+        start: usize,
+        stop: usize,
+    ) []const []const u8 {
+        const list_ptr = self.lists.getPtr(key) orelse return &[_][]const u8{};
+        const len = list_ptr.items.len;
+
+        const s = if (start < len) start else len;
+        const e = if (stop < len) stop else len;
+        return list_ptr.items[s..e];
     }
 
     pub fn beginTransaction(self: *Database) !void {
@@ -567,6 +692,34 @@ pub fn main() !void {
         std.debug.print("language   = {s}\n", .{db.get("language").?});
         std.debug.print("hobby      = {?s}\n", .{db.get("hobby")});
         std.debug.print("city       = {?s}\n", .{db.get("city")});
+    }
+
+    //----------------------------------------------------------------------
+    // 5. LIST OPERATIONS
+    //----------------------------------------------------------------------
+    {
+        const conn3 = try ConnectionString.parse(alloc, "file=my_kv_store.log;mode=read_write");
+        defer conn3.deinit(alloc);
+
+        var db = try Database.init(alloc, conn3);
+        defer db.deinit();
+
+        std.debug.print("\n--- LIST OPS ---\n", .{});
+
+        try db.lpush("mylist", "a");
+        try db.lpush("mylist", "b");
+        try db.lpush("mylist", "c");
+
+        const before = db.lrange("mylist", 0, 10);
+        std.debug.print("mylist before pop:\n", .{});
+        for (before) |v| std.debug.print("  - {s}\n", .{v});
+
+        const popped = try db.lpop("mylist");
+        if (popped) |p| std.debug.print("LPOP -> {s}\n", .{p});
+
+        const after = db.lrange("mylist", 0, 10);
+        std.debug.print("mylist after pop:\n", .{});
+        for (after) |v| std.debug.print("  - {s}\n", .{v});
     }
 }
 
