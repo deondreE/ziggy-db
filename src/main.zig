@@ -261,7 +261,7 @@ pub const ConnectionString = struct {
 
 pub const Database = struct {
     map: std.StringHashMap([]const u8),
-    lists: std.StringHashMap(std.ArrayList([]const u8)),
+    lists: std.StringHashMap(std.array_list.Managed([]const u8)),
     allocator: std.mem.Allocator,
     log_file: std.fs.File,
     file_path: []const u8,
@@ -315,7 +315,7 @@ pub const Database = struct {
 
         var db = Database{
             .map = std.StringHashMap([]const u8).init(allocator),
-            .lists = std.StringHashMap(std.ArrayList([]const u8)).init(allocator),
+            .lists = std.StringHashMap(std.array_list.Managed([]const u8)).init(allocator),
             .allocator = allocator,
             .log_file = log_file,
             .file_path = try allocator.dupe(u8, conn_str.file_path),
@@ -366,7 +366,7 @@ pub const Database = struct {
                     },
                     .ListPush => |lp_entry| {
                         var list = db.lists.getPtr(lp_entry.key) orelse blk: {
-                            const new_list = std.ArrayList([]const u8).init(db.allocator);
+                            const new_list = std.array_list.Managed([]const u8).init(db.allocator);
                             try db.lists.put(
                                 try db.allocator.dupe(u8, lp_entry.key),
                                 new_list,
@@ -416,6 +416,8 @@ pub const Database = struct {
                 self.allocator.free(item);
             }
             arr.deinit();
+
+            self.allocator.free(entry.key_ptr.*);
         }
         self.lists.deinit();
 
@@ -444,7 +446,7 @@ pub const Database = struct {
         try self.log_file.sync();
 
         var list = self.lists.getPtr(key) orelse blk: {
-            const new_list = std.ArrayList([]const u8).init(self.allocator);
+            const new_list = std.array_list.Managed([]const u8).init(self.allocator);
             try self.lists.put(try self.allocator.dupe(u8, key), new_list);
             break :blk self.lists.getPtr(key).?;
         };
@@ -468,8 +470,8 @@ pub const Database = struct {
         };
         try log_entry.serialize(self.log_file);
         try self.log_file.sync();
-
         log_entry.printTable();
+
         return popped;
     }
 
@@ -715,7 +717,10 @@ pub fn main() !void {
         for (before) |v| std.debug.print("  - {s}\n", .{v});
 
         const popped = try db.lpop("mylist");
-        if (popped) |p| std.debug.print("LPOP -> {s}\n", .{p});
+        if (popped) |p| {
+            std.debug.print("LPOP -> {s}\n", .{p});
+            db.allocator.free(p);
+        }
 
         const after = db.lrange("mylist", 0, 10);
         std.debug.print("mylist after pop:\n", .{});
