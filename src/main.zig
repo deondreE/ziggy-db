@@ -1,9 +1,13 @@
 const std = @import("std");
+const WAL_MAGIC_NUMBER = @import("wal.zig").WAL_MAGIC_NUMBER;
+const WAL_VERSION = @import("wal.zig").WAL_VERSION;
 
 // Define the types of operations we can log.
 const OperationType = enum(u8) {
     Set,
     Delete,
+    ListPush,
+    ListPop,
 };
 
 // Define the structure of a single log entry.
@@ -15,6 +19,16 @@ const LogEntry = union(OperationType) {
         value: []const u8,
     },
     Delete: struct {
+        key_len: u32,
+        key: []const u8,
+    },
+    ListPush: struct {
+        key_len: u32,
+        key: []const u8,
+        value_len: u32,
+        value: []const u8,
+    },
+    ListPop: struct {
         key_len: u32,
         key: []const u8,
     },
@@ -40,6 +54,22 @@ const LogEntry = union(OperationType) {
                 std.mem.writeInt(u32, &int_buf, d_entry.key_len, .little);
                 try file.writeAll(&int_buf);
                 try file.writeAll(d_entry.key);
+            },
+            .ListPush => |lp| {
+                var int_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &int_buf, lp.key_len, .little);
+                try file.writeAll(&int_buf);
+                try file.writeAll(lp.key);
+
+                std.mem.writeInt(u32, &int_buf, lp.value_len, .little);
+                try file.writeAll(&int_buf);
+                try file.writeAll(lp.value);
+            },
+            .ListPop => |lp| {
+                var int_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &int_buf, lp.key_len, .little);
+                try file.writeAll(&int_buf);
+                try file.writeAll(lp.key);
             },
         }
     }
@@ -99,6 +129,10 @@ const LogEntry = union(OperationType) {
                         .key = key_buf,
                     },
                 };
+            },
+            .ListPush => |lp| {
+                var int_buf: [4]u8 = undefined;
+                _ = file.readAll(&int_buf);
             },
         }
     }
@@ -182,11 +216,43 @@ pub const ConnectionString = struct {
 
 pub const Database = struct {
     map: std.StringHashMap([]const u8),
+    lists: std.StringHashMap(std.ArrayList([]const u8)),
     allocator: std.mem.Allocator,
     log_file: std.fs.File,
     file_path: []const u8,
     in_tx: bool = false,
     tx_map: ?std.StringHashMap([]const u8) = null,
+
+    fn writeWalHeader(file: std.fs.File) !void {
+        var header: [6]u8 = undefined;
+        std.mem.writeInt(u32, header[0..4], WAL_MAGIC_NUMBER, .little);
+        std.mem.writeInt(u16, header[4..6], WAL_VERSION, .little);
+        try file.writeAll(&header);
+        try file.sync();
+    }
+
+    fn verifyWalHeader(file: std.fs.File) !void {
+        var header: [6]u8 = undefined;
+        const bytes_read = try file.readAll(&header);
+        if (bytes_read < 6) {
+            std.debug.print("Invalid WAL file: header too short ({d} bytes)\n", .{bytes_read});
+            return error.InvalidWalFile;
+        }
+
+        const magic = std.mem.readInt(u32, header[0..4], .little);
+        if (magic != WAL_MAGIC_NUMBER) {
+            std.debug.print("Invalid WAL file: magic number mismatch. Expected 0x{X}, got 0x{X}\n", .{ WAL_MAGIC_NUMBER, magic });
+            return error.InvalidWalFile;
+        }
+
+        const version = std.mem.readInt(u16, header[4..6], .little);
+        if (version != WAL_VERSION) {
+            std.debug.print("Unsupported WAL version: {d} (expected {d})\n", .{ version, WAL_VERSION });
+            return error.UnsupportedWalVersion;
+        }
+
+        std.debug.print("✓ Valid WAL file (version {d})\n", .{version});
+    }
 
     pub fn init(allocator: std.mem.Allocator, conn_str: ConnectionString) !Database {
         const is_read_only = std.mem.eql(u8, conn_str.mode, "read_only");
@@ -194,7 +260,9 @@ pub const Database = struct {
 
         var log_file = std.fs.cwd().openFile(conn_str.file_path, .{ .mode = file_mode }) catch |err| blk: {
             if (err == error.FileNotFound and !is_read_only) {
-                break :blk try std.fs.cwd().createFile(conn_str.file_path, .{ .read = true });
+                const new_file = try std.fs.cwd().createFile(conn_str.file_path, .{ .read = true });
+                try writeWalHeader(new_file);
+                break :blk new_file;
             }
             return err;
         };
@@ -202,6 +270,7 @@ pub const Database = struct {
 
         var db = Database{
             .map = std.StringHashMap([]const u8).init(allocator),
+            .lists = std.StringHashMap(std.ArrayList([]const u8)).init(allocator),
             .allocator = allocator,
             .log_file = log_file,
             .file_path = try allocator.dupe(u8, conn_str.file_path),
@@ -212,6 +281,13 @@ pub const Database = struct {
         const file_size = (try db.log_file.stat()).size;
         if (file_size > 0) {
             try db.log_file.seekTo(0);
+
+            if (file_size >= 6) {
+                try verifyWalHeader(db.log_file);
+            } else {
+                std.debug.print("Warning: File too small to contain valid WAL header\n", .{});
+                return error.InvalidWalFile;
+            }
 
             while (true) {
                 const entry = LogEntry.deserialize(db.log_file, db.allocator) catch |err| {
@@ -264,6 +340,16 @@ pub const Database = struct {
             }
             tx.deinit();
         }
+
+        var lit = self.lists.iterator();
+        while (lit.next()) |entry| {
+            var arr = entry.value_ptr.*;
+            for (arr.items) |item| {
+                self.allocator.free(item);
+            }
+            arr.deinit();
+        }
+        self.lists.deinit();
 
         var it = self.map.iterator();
         while (it.next()) |entry| {
