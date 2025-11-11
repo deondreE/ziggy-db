@@ -1,5 +1,5 @@
 const std = @import("std");
-const dbmod = @import("main.zig");
+const dbmod = @import("db.zig");
 
 const Command = enum {
     help,
