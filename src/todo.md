@@ -14,7 +14,8 @@
 
 - Problem: Value.Binary is currently used for arbitrary binary data, but printValue and shell.get use {s} which implies UTF-8. If truly arbitrary binary data is stored, this could print garbage or error.
 
-## Essential Features & Persistence
+
+## Extended Data Types && Advanced Features
 
 1. Snapshots / Compaction
 
@@ -40,7 +41,6 @@ Action:
 
 - Problem: No native way to atomically increment/decrement integer values.
 
-## Extended Data Types && Advanced Features
 
 1. More Complex Data Types:
 
