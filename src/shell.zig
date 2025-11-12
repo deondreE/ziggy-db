@@ -112,7 +112,15 @@ pub fn main() !void {
                     try stdout.print("Missing key\n", .{});
                     continue;
                 };
-                if (db.get(key)) |v| try stdout.print("{s}\n", .{v}) else try stdout.print("(nil)\n", .{});
+                if (db.get(key)) |v| {
+                    switch (v) {
+                        .String => |s| try stdout.print("{s}\n", .{s}),
+                        .Integer => |i| try stdout.print("{d}\n", .{i}),
+                        .Float => |f| try stdout.print("{d}\n", .{f}),
+                        .Bool => |b| try stdout.print("{}\n", .{b}),
+                        .Binary => |b| try stdout.print("{s}\n", .{b}),
+                    }
+                } else try stdout.print("(nil)\n", .{});
             },
             .del => {
                 const key = toks.next() orelse {

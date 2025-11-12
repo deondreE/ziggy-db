@@ -11,14 +11,44 @@ const OperationType = enum(u8) {
     ListPop,
 };
 
+pub const ValueType = enum(u8) {
+    String,
+    Integer,
+    Float,
+    Bool,
+    Binary,
+};
+
+pub fn printValue(value: Value) void {
+    switch (value) {
+        .String => |s| std.debug.print("{s}", .{s}),
+        .Integer => |i| std.debug.print("{d}", .{i}),
+        .Float => |f| std.debug.print("{d}", .{f}),
+        .Bool => |b| std.debug.print("{}", .{b}),
+        .Binary => |b| {
+            std.debug.print("Binary[{d} bytes]: ", .{b.len});
+            for (b) |byte| {
+                if (byte >= 32 and byte < 127) {
+                    std.debug.print("{c}", .{byte});
+                } else {
+                    std.debug.print("\\x{x:0>2}", .{byte});
+                }
+            }
+        },
+    }
+}
+
+const Value = union(ValueType) {
+    String: []const u8,
+    Integer: i64,
+    Float: f64,
+    Bool: bool,
+    Binary: []const u8,
+};
+
 // Define the structure of a single log entry.
 const LogEntry = union(OperationType) {
-    Set: struct {
-        key_len: u32,
-        key: []const u8,
-        value_len: u32,
-        value: []const u8,
-    },
+    Set: struct { val_type: ValueType, key_len: u32, key: []const u8, value_len: u32, raw_value: []const u8 },
     Delete: struct {
         key_len: u32,
         key: []const u8,
@@ -35,135 +65,127 @@ const LogEntry = union(OperationType) {
     },
 
     pub fn serialize(self: LogEntry, file: std.fs.File) !void {
-        var buf: [1]u8 = undefined;
-        buf[0] = @intFromEnum(self);
-        try file.writeAll(&buf);
+        var tag: [1]u8 = .{@intFromEnum(self)};
+        try file.writeAll(&tag);
+
+        var buf4: [4]u8 = undefined;
 
         switch (self) {
             .Set => |s_entry| {
-                var int_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &int_buf, s_entry.key_len, .little);
-                try file.writeAll(&int_buf);
-                try file.writeAll(s_entry.key);
+                var vt: [1]u8 = .{@intFromEnum(s_entry.val_type)};
+                try file.writeAll(&vt);
 
-                std.mem.writeInt(u32, &int_buf, s_entry.value_len, .little);
-                try file.writeAll(&int_buf);
-                try file.writeAll(s_entry.value);
+                std.mem.writeInt(u32, &buf4, s_entry.key_len, .little);
+                try file.writeAll(&buf4);
+                std.mem.writeInt(u32, &buf4, s_entry.value_len, .little);
+                try file.writeAll(&buf4);
+                try file.writeAll(s_entry.key);
+                try file.writeAll(s_entry.raw_value);
             },
             .Delete => |d_entry| {
-                var int_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &int_buf, d_entry.key_len, .little);
-                try file.writeAll(&int_buf);
+                std.mem.writeInt(u32, &buf4, d_entry.key_len, .little);
+                try file.writeAll(&buf4);
                 try file.writeAll(d_entry.key);
             },
             .ListPush => |lp| {
-                var int_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &int_buf, lp.key_len, .little);
-                try file.writeAll(&int_buf);
+                std.mem.writeInt(u32, &buf4, lp.key_len, .little);
+                try file.writeAll(&buf4);
                 try file.writeAll(lp.key);
 
-                std.mem.writeInt(u32, &int_buf, lp.value_len, .little);
-                try file.writeAll(&int_buf);
+                std.mem.writeInt(u32, &buf4, lp.value_len, .little);
+                try file.writeAll(&buf4);
                 try file.writeAll(lp.value);
             },
             .ListPop => |lp| {
-                var int_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &int_buf, lp.key_len, .little);
-                try file.writeAll(&int_buf);
+                std.mem.writeInt(u32, &buf4, lp.key_len, .little);
+                try file.writeAll(&buf4);
                 try file.writeAll(lp.key);
             },
         }
     }
 
     pub fn deserialize(file: std.fs.File, allocator: std.mem.Allocator) !LogEntry {
-        var buf: [1]u8 = undefined;
-        const bytes_read = try file.readAll(&buf);
-        if (bytes_read == 0) return error.EndOfStream;
+        var tag: [1]u8 = undefined;
+        const br = try file.readAll(&tag);
+        if (br == 0) return error.EndOfStream;
+        const op = @as(OperationType, @enumFromInt(tag[0]));
 
-        const op_type_byte = buf[0];
-        const op_type = @as(OperationType, @enumFromInt(op_type_byte));
+        var buf4: [4]u8 = undefined;
 
-        switch (op_type) {
+        switch (op) {
             .Set => {
-                var int_buf: [4]u8 = undefined;
-                const len_bytes_read = try file.readAll(&int_buf);
-                if (len_bytes_read < 4) return error.EndOfStream;
-                const key_len = std.mem.readInt(u32, &int_buf, .little);
+                var vt_buf: [1]u8 = undefined;
+                _ = try file.readAll(&vt_buf);
+                const vt = @as(ValueType, @enumFromInt(vt_buf[0]));
 
-                const key_buf = try allocator.alloc(u8, key_len);
-                errdefer allocator.free(key_buf);
-                const key_bytes_read = try file.readAll(key_buf);
-                if (key_bytes_read < key_len) return error.EndOfStream;
+                _ = try file.readAll(&buf4);
+                const key_len = std.mem.readInt(u32, &buf4, .little);
+                _ = try file.readAll(&buf4);
+                const val_len = std.mem.readInt(u32, &buf4, .little);
 
-                const value_len_bytes_read = try file.readAll(&int_buf);
-                if (value_len_bytes_read < 4) return error.EndOfStream;
-                const value_len = std.mem.readInt(u32, &int_buf, .little);
+                const key = try allocator.alloc(u8, key_len);
+                errdefer allocator.free(key);
+                if (try file.readAll(key) < key_len) return error.EndOfStream;
 
-                const value_buf = try allocator.alloc(u8, value_len);
-                errdefer allocator.free(value_buf);
-                const value_bytes_read = try file.readAll(value_buf);
-                if (value_bytes_read < value_len) return error.EndOfStream;
+                const val = try allocator.alloc(u8, val_len);
+                errdefer allocator.free(val);
+                if (try file.readAll(val) < val_len) return error.EndOfStream;
 
-                return LogEntry{
+                return .{
                     .Set = .{
+                        .val_type = vt,
                         .key_len = key_len,
-                        .key = key_buf,
-                        .value_len = value_len,
-                        .value = value_buf,
+                        .key = key,
+                        .value_len = val_len,
+                        .raw_value = val,
                     },
                 };
             },
             .Delete => {
-                var int_buf: [4]u8 = undefined;
-                const len_bytes_read = try file.readAll(&int_buf);
-                if (len_bytes_read < 4) return error.EndOfStream;
-                const key_len = std.mem.readInt(u32, &int_buf, .little);
-
-                const key_buf = try allocator.alloc(u8, key_len);
-                errdefer allocator.free(key_buf);
-                const key_bytes_read = try file.readAll(key_buf);
-                if (key_bytes_read < key_len) return error.EndOfStream;
+                _ = try file.readAll(&buf4);
+                const key_len = std.mem.readInt(u32, &buf4, .little);
+                const key = try allocator.alloc(u8, key_len);
+                errdefer allocator.free(key);
+                if (try file.readAll(key) < key_len) return error.EndOfStream;
 
                 return LogEntry{
                     .Delete = .{
                         .key_len = key_len,
-                        .key = key_buf,
+                        .key = key,
                     },
                 };
             },
             .ListPush => {
-                var int_buf: [4]u8 = undefined;
-                _ = try file.readAll(&int_buf);
-                const key_len = std.mem.readInt(u32, &int_buf, .little);
-                const key_buf = try allocator.alloc(u8, key_len);
-                errdefer allocator.free(key_buf);
-                _ = try file.readAll(key_buf);
+                _ = try file.readAll(&buf4);
+                const key_len = std.mem.readInt(u32, &buf4, .little);
+                const key = try allocator.alloc(u8, key_len);
+                errdefer allocator.free(key);
+                if (try file.readAll(&buf4) < key_len) return error.EndOfStream;
 
-                _ = try file.readAll(&int_buf);
-                const val_len = std.mem.readInt(u32, &int_buf, .little);
-                const val_buf = try allocator.alloc(u8, val_len);
-                errdefer allocator.free(val_buf);
-                _ = try file.readAll(val_buf);
+                _ = try file.readAll(&buf4);
+                const val_len = std.mem.readInt(u32, &buf4, .little);
+                const val = try allocator.alloc(u8, val_len);
+                errdefer allocator.free(val);
+                if (try file.readAll(val) < val_len) return error.EndOfStream;
 
                 return LogEntry{ .ListPush = .{
                     .key_len = key_len,
-                    .key = key_buf,
+                    .key = key,
                     .value_len = val_len,
-                    .value = val_buf,
+                    .value = val,
                 } };
             },
             .ListPop => {
-                var int_buf: [4]u8 = undefined;
-                _ = try file.readAll(&int_buf);
-                const key_len = std.mem.readInt(u32, &int_buf, .little);
-                const key_buf = try allocator.alloc(u8, key_len);
-                errdefer allocator.free(key_buf);
-                _ = try file.readAll(key_buf);
+                _ = try file.readAll(&buf4);
+                const key_len = std.mem.readInt(u32, &buf4, .little);
+                const key = try allocator.alloc(u8, key_len);
+                errdefer allocator.free(key);
+                if (try file.readAll(key) < key_len) return error.EndOfStream;
 
                 return LogEntry{
                     .ListPop = .{
                         .key_len = key_len,
-                        .key = key_buf,
+                        .key = key,
                     },
                 };
             },
@@ -177,31 +199,37 @@ const LogEntry = union(OperationType) {
 
         switch (self) {
             .Set => |s_entry| {
-                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
+                std.debug.print("| {s:9} | {s:13} |\n", .{
                     "Set",
                     s_entry.key,
-                    s_entry.value,
                 });
+
+                for (s_entry.raw_value) |b| {
+                    if (b >= 32 and b < 127) {
+                        std.debug.print("{c}", .{b});
+                    } else {
+                        std.debug.print(".", .{});
+                    }
+                }
+                std.debug.print("\n", .{});
             },
             .Delete => |d_entry| {
-                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
+                std.debug.print("| {s:9} | {s:13} | -\n", .{
                     "Delete",
                     d_entry.key,
-                    "-",
                 });
             },
             .ListPush => |lp| {
-                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
+                std.debug.print("| {s:9} | {s:13} | {s:21} | \n", .{
                     "ListPush",
                     lp.key,
                     lp.value,
                 });
             },
             .ListPop => |lp| {
-                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
+                std.debug.print("| {s:9} | {s:13} | -\n", .{
                     "ListPop",
                     lp.key,
-                    "-",
                 });
             },
         }
@@ -261,13 +289,13 @@ pub const ConnectionString = struct {
 };
 
 pub const Database = struct {
-    map: std.StringHashMap([]const u8),
+    map: std.StringHashMap(Value),
     lists: std.StringHashMap(std.array_list.Managed([]const u8)),
     allocator: std.mem.Allocator,
     log_file: std.fs.File,
     file_path: []const u8,
     in_tx: bool = false,
-    tx_map: ?std.StringHashMap([]const u8) = null,
+    tx_map: ?std.StringHashMap(Value) = null,
     replaying: bool = false,
 
     fn writeWalHeader(file: std.fs.File) !void {
@@ -298,7 +326,7 @@ pub const Database = struct {
             return error.UnsupportedWalVersion;
         }
         _ = std.os.windows.kernel32.SetConsoleOutputCP(65001); // UTF-8
-        std.debug.print("{s} Valid WAL file (version {d})\n", .{"✓", version});
+        std.debug.print("{s} Valid WAL file (version {d})\n", .{ "✓", version });
     }
 
     pub fn init(allocator: std.mem.Allocator, conn_str: ConnectionString) !Database {
@@ -316,7 +344,7 @@ pub const Database = struct {
         errdefer log_file.close();
 
         var db = Database{
-            .map = std.StringHashMap([]const u8).init(allocator),
+            .map = std.StringHashMap(Value).init(allocator),
             .lists = std.StringHashMap(std.array_list.Managed([]const u8)).init(allocator),
             .allocator = allocator,
             .log_file = log_file,
@@ -339,23 +367,27 @@ pub const Database = struct {
 
                 switch (entry) {
                     .Set => |s_entry| {
-                        // Remove existing entry if it exists
-                        if (db.map.fetchRemove(s_entry.key)) |removed| {
-                            db.allocator.free(removed.key);
-                            db.allocator.free(removed.value);
+                        const val: Value = switch (s_entry.val_type) {
+                            .String => Value{ .String = try allocator.dupe(u8, s_entry.raw_value) },
+                            .Integer => Value{ .Integer = std.mem.readInt(i64, s_entry.raw_value[0..8], .little) },
+                            .Float => Value{ .Float = @bitCast(std.mem.readInt(u64, s_entry.raw_value[0..8], .little)) },
+                            .Bool => Value{ .Bool = s_entry.raw_value[0] != 0 },
+                            .Binary => Value{ .Binary = try allocator.dupe(u8, s_entry.raw_value) },
+                        };
+
+                        if (db.map.fetchRemove(s_entry.key)) |old| {
+                            db.allocator.free(old.key);
+                            freeValue(db.allocator, old.value);
                         }
 
-                        const owned_key = try db.allocator.dupe(u8, s_entry.key);
-                        const owned_value = try db.allocator.dupe(u8, s_entry.value);
-                        try db.map.put(owned_key, owned_value);
-
-                        db.allocator.free(s_entry.key);
-                        db.allocator.free(s_entry.value);
+                        try db.map.put(try allocator.dupe(u8, s_entry.key), val);
+                        allocator.free(s_entry.key);
+                        allocator.free(s_entry.raw_value);
                     },
                     .Delete => |d_entry| {
                         if (db.map.fetchRemove(d_entry.key)) |removed| {
                             db.allocator.free(removed.key);
-                            db.allocator.free(removed.value);
+                            freeValue(allocator, removed.value);
                         }
                         // Free the temporary key buffer since we don't need it
                         db.allocator.free(d_entry.key);
@@ -384,14 +416,14 @@ pub const Database = struct {
                         db.allocator.free(lp_entry.key);
                     },
                 }
-                db.replaying = false;
-                try db.log_file.seekTo(file_size);
-            }else {
+            } else if (file_size > 0) {
                 std.debug.print("Warning: File too small to contain valid WAL header\n", .{});
                 return error.InvalidWalFile;
             }
-
         }
+
+        db.replaying = false;
+        try db.log_file.seekTo(file_size);
 
         return db;
     }
@@ -401,7 +433,7 @@ pub const Database = struct {
             var it = tx.iterator();
             while (it.next()) |entry| {
                 self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
+                freeValue(self.allocator, entry.value_ptr.*);
             }
             tx.deinit();
         }
@@ -421,7 +453,7 @@ pub const Database = struct {
         var it = self.map.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
+            freeValue(self.allocator, entry.value_ptr.*);
         }
 
         self.map.deinit();
@@ -429,27 +461,60 @@ pub const Database = struct {
         self.allocator.free(self.file_path);
     }
 
-    pub fn lpush(self: *Database, key: []const u8, value: []const u8) !void {
-        const log_entry = LogEntry{
-            .ListPush = .{
-                .key_len = @intCast(key.len),
-                .key = key,
-                .value_len = @intCast(value.len),
-                .value = value,
+    pub fn setTyped(self: *Database, key: []const u8, v: Value) !void {
+        var raw_buf: [8]u8 = undefined;
+        const tmp: []const u8 = switch (v) {
+            .String => v.String,
+            .Binary => v.Binary,
+            .Integer => blk: {
+                std.mem.writeInt(i64, &raw_buf, v.Integer, .little);
+                break :blk raw_buf[0..8];
+            },
+            .Float => blk: {
+                const bits: u64 = @bitCast(v.Float);
+                std.mem.writeInt(u64, &raw_buf, bits, .little);
+                break :blk raw_buf[0..8];
+            },
+            .Bool => blk: {
+                raw_buf[0] = if (v.Bool) 1 else 0;
+                break :blk raw_buf[0..1];
             },
         };
-        try log_entry.serialize(self.log_file);
-        try self.log_file.sync();
 
-        var list = self.lists.getPtr(key) orelse blk: {
-            const new_list = std.array_list.Managed([]const u8).init(self.allocator);
-            try self.lists.put(try self.allocator.dupe(u8, key), new_list);
-            break :blk self.lists.getPtr(key).?;
+        const val_type = switch (v) {
+            .String => ValueType.String,
+            .Integer => ValueType.Integer,
+            .Float => ValueType.Float,
+            .Bool => ValueType.Bool,
+            .Binary => ValueType.Binary,
         };
 
-        const val_copy = try self.allocator.dupe(u8, value);
-        try list.insert(0, val_copy);
-        log_entry.printTable();
+        const log_entry = LogEntry{
+            .Set = .{
+                .val_type = val_type,
+                .key_len = @intCast(key.len),
+                .key = key,
+                .value_len = @intCast(tmp.len),
+                .raw_value = tmp,
+            },
+        };
+
+        if (!self.replaying and !self.in_tx) {
+            try log_entry.serialize(self.log_file);
+            try self.log_file.sync();
+            log_entry.printTable();
+        }
+
+        if (self.map.fetchRemove(key)) |old| {
+            self.allocator.free(old.key);
+            freeValue(self.allocator, old.value);
+        }
+        const new_val = try dupValue(self.allocator, v);
+        try self.map.put(try self.allocator.dupe(u8, key), new_val);
+    }
+
+    pub fn lpush(self: *Database, key: []const u8, value: []const u8) !void {
+        try self.setTyped(key, Value{ .Binary = value });
     }
 
     pub fn lpop(self: *Database, key: []const u8) !?[]const u8 {
@@ -489,12 +554,12 @@ pub const Database = struct {
     pub fn beginTransaction(self: *Database) !void {
         if (self.in_tx) return error.TransactionAlreadyActive;
         self.in_tx = true;
-        self.tx_map = std.StringHashMap([]const u8).init(self.allocator);
+        self.tx_map = std.StringHashMap(Value).init(self.allocator);
 
         var it = self.map.iterator();
         while (it.next()) |entry| {
             const key_copy = try self.allocator.dupe(u8, entry.key_ptr.*);
-            const value_copy = try self.allocator.dupe(u8, entry.value_ptr.*);
+            const value_copy = try dupValue(self.allocator, entry.value_ptr.*);
             try self.tx_map.?.put(key_copy, value_copy);
         }
 
@@ -503,28 +568,64 @@ pub const Database = struct {
 
     pub fn commit(self: *Database) !void {
         if (!self.in_tx or self.tx_map == null) return error.NoTransaction;
-        self.in_tx = false;
 
         var tx_map = self.tx_map.?;
-
-        var it = tx_map.iterator();
-        while (it.next()) |entry| {
-            const v = entry.value_ptr.*;
-            if (v.len == 0) {
-                _ = try self.del(entry.key_ptr.*);
-            } else {
-                try self.set(entry.key_ptr.*, v);
-            }
-        }
+        self.tx_map = null;
+        self.in_tx = false;
 
         var free_it = tx_map.iterator();
         while (free_it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
+            freeValue(self.allocator, entry.value_ptr.*);
         }
         tx_map.deinit();
 
-        self.tx_map = null;
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            const v = entry.value_ptr.*;
+            const key = entry.key_ptr.*;
+
+            var raw_buf: [8]u8 = undefined;
+            const tmp: []const u8 = switch (v) {
+                .String => v.String,
+                .Binary => v.Binary,
+                .Integer => blk: {
+                    std.mem.writeInt(i64, &raw_buf, v.Integer, .little);
+                    break :blk raw_buf[0..8];
+                },
+                .Float => blk: {
+                    const bits: u64 = @bitCast(v.Float);
+                    std.mem.writeInt(u64, &raw_buf, bits, .little);
+                    break :blk raw_buf[0..8];
+                },
+                .Bool => blk: {
+                    raw_buf[0] = if (v.Bool) 1 else 0;
+                    break :blk raw_buf[0..1];
+                },
+            };
+
+            const val_type = switch (v) {
+                .String => ValueType.String,
+                .Integer => ValueType.Integer,
+                .Float => ValueType.Float,
+                .Bool => ValueType.Bool,
+                .Binary => ValueType.Binary,
+            };
+
+            const log_entry = LogEntry{
+                .Set = .{
+                    .val_type = val_type,
+                    .key_len = @intCast(key.len),
+                    .key = key,
+                    .value_len = @intCast(tmp.len),
+                    .raw_value = tmp,
+                },
+            };
+
+            try log_entry.serialize(self.log_file);
+        }
+        try self.log_file.sync();
+
         std.debug.print("Transaction Committed!\n", .{});
     }
 
@@ -532,12 +633,27 @@ pub const Database = struct {
         if (!self.in_tx or self.tx_map == null) return;
 
         var tx = self.tx_map.?;
-        var it = tx.iterator();
+        var it = self.map.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
+            freeValue(self.allocator, entry.value_ptr.*);
+        }
+        self.map.clearRetainingCapacity();
+
+        var tx_it = tx.iterator();
+        while (tx_it.next()) |entry| {
+            const key_copy = self.allocator.dupe(u8, entry.key_ptr.*) catch unreachable;
+            const val_copy = dupValue(self.allocator, entry.value_ptr.*) catch unreachable;
+            self.map.put(key_copy, val_copy) catch unreachable;
+        }
+
+        var free_it = tx.iterator();
+        while (free_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            freeValue(self.allocator, entry.value_ptr.*);
         }
         tx.deinit();
+
         self.tx_map = null;
         self.in_tx = false;
 
@@ -545,89 +661,83 @@ pub const Database = struct {
     }
 
     fn setInMemory(self: *Database, key: []const u8, value: []const u8) !void {
-         if (self.map.fetchRemove(key)) |removed| {
+        if (self.map.fetchRemove(key)) |removed| {
             self.allocator.free(removed.key);
-            self.allocator.free(removed.value);
+            freeValue(self.allocator, removed.value);
         }
 
-         const owned_key = try self.allocator.dupe(u8, key);
+        const owned_key = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(owned_key);
 
         const owned_value = try self.allocator.dupe(u8, value);
         errdefer self.allocator.free(owned_value);
-        try self.map.put(owned_key, owned_value);
+        try self.map.put(owned_key, Value{ .String = owned_value });
     }
 
     fn deleteInMemory(self: *Database, key: []const u8) bool {
         if (self.map.fetchRemove(key)) |removed| {
             self.allocator.free(removed.key);
-            self.allocator.free(removed.value);
+            freeValue(self.allocator, removed.value);
             return true;
         }
         return false;
     }
 
     pub fn set(self: *Database, key: []const u8, value: []const u8) !void {
-        // Write to log first
-        const log_entry = LogEntry{
-            .Set = .{
-                .key_len = @intCast(key.len),
-                .key = key,
-                .value_len = @intCast(value.len),
-                .value = value,
-            },
-        };
-
-        if (self.in_tx) {
-            var tx = self.tx_map orelse return error.NoTransaction;
-            if (tx.fetchRemove( key)) |removed| {
-                self.allocator.free(removed.key);
-                self.allocator.free(removed.value);
-            }
-            const owned_key = try self.allocator.dupe(u8, key);
-            errdefer self.allocator.free(owned_key);
-
-            const owned_value = try self.allocator.dupe(u8, value);
-            errdefer self.allocator.free(owned_value);
-
-            try tx.put(owned_key, owned_value);
-            return;
-        }
-
-        // Update in-memory map
-        try log_entry.serialize(self.log_file);
-        try self.log_file.sync();
-
-        try self.setInMemory(key, value);
-        log_entry.printTable();
+        try self.setTyped(key, Value{ .String = value });
     }
 
-    pub fn get(self: *Database, key: []const u8) ?[]const u8 {
+    pub fn get(self: *Database, key: []const u8) ?Value {
         return self.map.get(key);
     }
 
-    pub fn del(self: *Database, key: []const u8) !bool {
-        if (self.in_tx) {
-            if (self.tx_map) |*tx| {
-                _ = tx.fetchRemove(key);
-                const owned_key = try self.allocator.dupe(u8, key);
-                errdefer self.allocator.free(owned_key);
-                try tx.put(owned_key, try self.allocator.dupe(u8, ""));
-                return true;
+    pub fn setString(self: *Database, key: []const u8, v: []const u8) !void {
+        try self.setTyped(key, Value{ .String = v });
+    }
 
-            }
+    pub fn setInt(self: *Database, key: []const u8, v: i64) !void {
+        try self.setTyped(key, Value{ .Integer = v });
+    }
+
+    pub fn setFloat(self: *Database, key: []const u8, v: f64) !void {
+        try self.setTyped(key, Value{ .Float = v });
+    }
+
+    pub fn setBool(self: *Database, key: []const u8, v: bool) !void {
+        try self.setTyped(key, Value{ .Bool = v });
+    }
+
+    pub fn del(self: *Database, key: []const u8) !bool {
+        if (!self.in_tx) {
+            const log_entry = LogEntry{
+                .Delete = .{
+                    .key_len = @intCast(key.len),
+                    .key = key,
+                },
+            };
+            try log_entry.serialize(self.log_file);
+            try self.log_file.sync();
+            log_entry.printTable();
         }
 
-        const log_entry = LogEntry{
-            .Delete = .{
-                .key_len = @intCast(key.len),
-                .key = key,
-            },
-        };
-        try log_entry.serialize(self.log_file);
-        try self.log_file.sync();
-        log_entry.printTable();
-
         return self.deleteInMemory(key);
+    }
+
+    pub fn dupValue(a: std.mem.Allocator, v: Value) !Value {
+        return switch (v) {
+            .String => |s| Value{ .String = try a.dupe(u8, s) },
+            .Binary => |b| Value{ .Binary = try a.dupe(u8, b) },
+            .Integer => Value{ .Integer = v.Integer },
+            .Float => Value{ .Float = v.Float },
+            .Bool => Value{ .Bool = v.Bool },
+        };
+    }
+
+    pub fn freeValue(a: std.mem.Allocator, v: Value) void {
+        switch (v) {
+            .String => |s| a.free(s),
+            .Binary => |b| a.free(b),
+            else => {},
+        }
     }
 };
