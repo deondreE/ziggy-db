@@ -193,16 +193,23 @@ const LogEntry = union(OperationType) {
     }
 
     pub fn printTable(self: LogEntry) void {
-        std.debug.print("+-----------+---------------+-----------------------+\n", .{});
-        std.debug.print("| Operation | Key           | Value                 |\n", .{});
-        std.debug.print("+-----------+---------------+-----------------------+\n", .{});
+        const CYAN = "\x1b[36m";
+        const GREEN = "\x1b[32m";
+        const YELLOW = "\x1b[33m";
+        const RED = "\x1b[31m";
+        const BLUE = "\x1b[34m";
+        const MAGENTA = "\x1b[35m";
+        const BOLD = "\x1b[1m";
+        const RESET = "\x1b[0m";
+        const DIM = "\x1b[2m";
+
+        std.debug.print("{s}╭───────────┬───────────────┬───────────────────────╮{s}\n", .{ DIM, RESET });
+        std.debug.print("{s}│{s} {s}Operation{s} {s}│{s} {s}Key{s}           {s}│{s} {s}Value{s}                 {s}│{s}\n", .{ DIM, RESET, BOLD, RESET, DIM, RESET, BOLD, RESET, DIM, RESET, BOLD, RESET, DIM, RESET });
+        std.debug.print("{s}├───────────┼───────────────┼───────────────────────┤{s}\n", .{ DIM, RESET });
 
         switch (self) {
             .Set => |s_entry| {
-                std.debug.print("| {s:9} | {s:13} | ", .{
-                    "Set",
-                    s_entry.key,
-                });
+                std.debug.print("{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} ", .{ DIM, RESET, GREEN, "Set", RESET, DIM, RESET, CYAN, s_entry.key, RESET, DIM, RESET });
 
                 var printed = false;
 
@@ -211,27 +218,25 @@ const LogEntry = union(OperationType) {
                     const float_val: f64 = @bitCast(bits);
                     const int_val: i64 = @bitCast(bits);
 
-                    // Heuristic: if float interpretation gives a value < 1e-100 or > 1e100,
-                    // or is NaN/Inf, it's probably an integer
                     const abs_float = @abs(float_val);
                     if (std.math.isNan(float_val) or std.math.isInf(float_val) or
                         abs_float < 1e-100 or abs_float > 1e100)
                     {
-                        // Treat as integer
-                        std.debug.print("{d:<21} |\n", .{int_val});
+                        std.debug.print("{s}{d:<21}{s} {s}│{s}\n", .{ YELLOW, int_val, RESET, DIM, RESET });
                         printed = true;
                     } else {
-                        // Treat as float
-                        std.debug.print("{d:<21.2} |\n", .{float_val});
+                        std.debug.print("{s}{d:<21.2}{s} {s}│{s}\n", .{ YELLOW, float_val, RESET, DIM, RESET });
                         printed = true;
                     }
                 } else if (s_entry.raw_value.len == 1) {
                     const bool_val = s_entry.raw_value[0] != 0;
-                    std.debug.print("{s:<21} |\n", .{if (bool_val) "true" else "false"});
+                    const bool_str = if (bool_val) "true" else "false";
+                    std.debug.print("{s}{s:<21}{s} {s}│{s}\n", .{ MAGENTA, bool_str, RESET, DIM, RESET });
                     printed = true;
                 }
 
                 if (!printed) {
+                    std.debug.print("{s}", .{BLUE});
                     for (s_entry.raw_value) |b| {
                         if (b >= 32 and b < 127) {
                             std.debug.print("{c}", .{b});
@@ -247,32 +252,21 @@ const LogEntry = union(OperationType) {
                             std.debug.print(" ", .{});
                         }
                     }
-                    std.debug.print(" |\n", .{});
+                    std.debug.print("{s} {s}│{s}\n", .{ RESET, DIM, RESET });
                 }
             },
             .Delete => |d_entry| {
-                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
-                    "Delete",
-                    d_entry.key,
-                    "-",
-                });
+                std.debug.print("{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} {s}{s:21}{s} {s}│{s}\n", .{ DIM, RESET, RED, "Delete", RESET, DIM, RESET, CYAN, d_entry.key, RESET, DIM, RESET, DIM, "-", RESET, DIM, RESET });
             },
             .ListPush => |lp| {
-                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
-                    "ListPush",
-                    lp.key,
-                    lp.value,
-                });
+                std.debug.print("{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} {s}{s:21}{s} {s}│{s}\n", .{ DIM, RESET, GREEN, "ListPush", RESET, DIM, RESET, CYAN, lp.key, RESET, DIM, RESET, BLUE, lp.value, RESET, DIM, RESET });
             },
             .ListPop => |lp| {
-                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
-                    "ListPop",
-                    lp.key,
-                    "-",
-                });
+                std.debug.print("{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} {s}{s:21}{s} {s}│{s}\n", .{ DIM, RESET, RED, "ListPop", RESET, DIM, RESET, CYAN, lp.key, RESET, DIM, RESET, DIM, "-", RESET, DIM, RESET });
             },
         }
-        std.debug.print("+-----------+---------------+-----------------------+\n", .{});
+
+        std.debug.print("{s}╰───────────┴───────────────┴───────────────────────╯{s}\n", .{ DIM, RESET });
     }
 };
 

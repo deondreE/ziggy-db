@@ -73,26 +73,29 @@ pub fn main() !void {
 
     const YELLOW = "\x1b[33m";
     const RESET = "\x1b[0m";
+    const CYAN = "\x1b[36m";
 
     try stdout.print(
         \\
-        \\  ╔════════════════════════════════════════╗
-        \\  ║                                        ║
-        \\  ║   {s}███████╗██╗ ██████╗  ██████╗██╗   ██╗{s}║
-        \\  ║   {s}╚══███╔╝██║██╔════╝ ██╔════╝╚██╗ ██╔╝{s}║
-        \\  ║   {s}  ███╔╝ ██║██║  ███╗██║  ███╗╚████╔╝{s} ║
-        \\  ║   {s} ███╔╝  ██║██║   ██║██║   ██║ ╚██╔╝{s}  ║
-        \\  ║   {s}███████╗██║╚██████╔╝╚██████╔╝  ██║{s}   ║
-        \\  ║   {s}╚══════╝╚═╝ ╚═════╝  ╚═════╝   ╚═╝{s}   ║
-        \\  ║                                 DB     ║
-        \\  ║                                        ║
-        \\  ╚════════════════════════════════════════╝
+        \\  ╔══════════════════════════════════════════════╗
+        \\  ║                                              ║
+        \\  ║     {s}███████╗██╗ ██████╗  ██████╗██╗   ██╗{s}    ║
+        \\  ║     {s}╚══███╔╝██║██╔════╝ ██╔════╝╚██╗ ██╔╝{s}    ║
+        \\  ║     {s}  ███╔╝ ██║██║  ███╗██║  ███╗╚████╔╝{s}     ║
+        \\  ║     {s} ███╔╝  ██║██║   ██║██║   ██║ ╚██╔╝{s}      ║
+        \\  ║     {s}███████╗██║╚██████╔╝╚██████╔╝  ██║{s}       ║
+        \\  ║     {s}╚══════╝╚═╝ ╚═════╝  ╚═════╝   ╚═╝{s}       ║
+        \\  ║                                      {s}DB{s}      ║
+        \\  ║  {s}────────────────────────────────────{s}        ║
+        \\  ║  Fast. Reliable. Written in Zig.             ║
+        \\  ║                                              ║
+        \\  ╚══════════════════════════════════════════════╝
         \\
-        \\  Welcome to ZiggyDB shell (Zig 0.15.2)
-        \\  Type HELP for commands, EXIT to quit.
+        \\  Welcome to ZiggyDB shell (v1.0.0 • Zig 0.15.2)
+        \\  Type HELP for commands • EXIT to quit
         \\
         \\
-    , .{ YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET });
+    , .{ YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, CYAN, RESET, YELLOW, RESET });
     while (true) {
         try stdout.print("ziggy> ", .{});
         try stdout.flush();
