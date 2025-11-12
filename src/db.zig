@@ -199,37 +199,76 @@ const LogEntry = union(OperationType) {
 
         switch (self) {
             .Set => |s_entry| {
-                std.debug.print("| {s:9} | {s:13} |\n", .{
+                std.debug.print("| {s:9} | {s:13} | ", .{
                     "Set",
                     s_entry.key,
                 });
 
-                for (s_entry.raw_value) |b| {
-                    if (b >= 32 and b < 127) {
-                        std.debug.print("{c}", .{b});
+                var printed = false;
+
+                if (s_entry.raw_value.len == 8) {
+                    const bits = std.mem.readInt(u64, s_entry.raw_value[0..8], .little);
+                    const float_val: f64 = @bitCast(bits);
+                    const int_val: i64 = @bitCast(bits);
+
+                    // Heuristic: if float interpretation gives a value < 1e-100 or > 1e100,
+                    // or is NaN/Inf, it's probably an integer
+                    const abs_float = @abs(float_val);
+                    if (std.math.isNan(float_val) or std.math.isInf(float_val) or
+                        abs_float < 1e-100 or abs_float > 1e100)
+                    {
+                        // Treat as integer
+                        std.debug.print("{d:<21} |\n", .{int_val});
+                        printed = true;
                     } else {
-                        std.debug.print(".", .{});
+                        // Treat as float
+                        std.debug.print("{d:<21.2} |\n", .{float_val});
+                        printed = true;
                     }
+                } else if (s_entry.raw_value.len == 1) {
+                    const bool_val = s_entry.raw_value[0] != 0;
+                    std.debug.print("{s:<21} |\n", .{if (bool_val) "true" else "false"});
+                    printed = true;
                 }
-                std.debug.print("\n", .{});
+
+                if (!printed) {
+                    for (s_entry.raw_value) |b| {
+                        if (b >= 32 and b < 127) {
+                            std.debug.print("{c}", .{b});
+                        } else {
+                            std.debug.print(".", .{});
+                        }
+                    }
+
+                    const val_len = s_entry.raw_value.len;
+                    if (val_len < 21) {
+                        var i: usize = 0;
+                        while (i < (21 - val_len)) : (i += 1) {
+                            std.debug.print(" ", .{});
+                        }
+                    }
+                    std.debug.print(" |\n", .{});
+                }
             },
             .Delete => |d_entry| {
-                std.debug.print("| {s:9} | {s:13} | -\n", .{
+                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
                     "Delete",
                     d_entry.key,
+                    "-",
                 });
             },
             .ListPush => |lp| {
-                std.debug.print("| {s:9} | {s:13} | {s:21} | \n", .{
+                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
                     "ListPush",
                     lp.key,
                     lp.value,
                 });
             },
             .ListPop => |lp| {
-                std.debug.print("| {s:9} | {s:13} | -\n", .{
+                std.debug.print("| {s:9} | {s:13} | {s:21} |\n", .{
                     "ListPop",
                     lp.key,
+                    "-",
                 });
             },
         }
