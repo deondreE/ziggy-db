@@ -44,7 +44,9 @@ pub const Database = struct {
             std.debug.print("Unsupported WAL version: {d} (expected {d})\n", .{ version, WAL_VERSION });
             return error.UnsupportedWalVersion;
         }
-        _ = std.os.windows.kernel32.SetConsoleOutputCP(65001); // UTF-8
+        if (std.Target.Os.Tag == .windows) {
+            _ = std.os.windows.kernel32.SetConsoleOutputCP(65001); // UTF-8
+        }
         std.debug.print("{s} Valid WAL file (version {d})\n", .{ "✓", version });
     }
 

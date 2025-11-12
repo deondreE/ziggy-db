@@ -2,3 +2,4 @@
 .zig-cache
 .idea
 .venv
+tests
