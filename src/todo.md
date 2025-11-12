@@ -37,18 +37,20 @@
 
 - [ ] Done
 
-Action:
-
-- Add expires_at: ?u64 (Unix timestamp).
-
-- Implement SETEXP.
-
-- Implement a background routine that periodically scans and deletes expired keys from map and logs Delete operations for them.
-
 4. Increment / Decrement Operations
 
 - Problem: No native way to atomically increment/decrement integer values.
 
+- [ ] Export formats
+  - CSV
+  - JSON
+  - EXCL
+- Command that is `EXPORT [TYPE|CSV|EXCEL|JSON]`
+- [ ] Import formats
+  - CSV
+  - JSON
+  - EXCL
+- Command that is `IMPORT [TYPE|CSV|EXCEL|JSON]`
 
 1. More Complex Data Types:
 
