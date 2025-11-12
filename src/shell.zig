@@ -137,7 +137,7 @@ pub fn main() !void {
             .set => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
-                    continue :shell_loop; // FIX: Continue the labeled loop
+                    continue :shell_loop;
                 };
 
                 var val_str: ?[]const u8 = null;
@@ -157,18 +157,18 @@ pub fn main() !void {
                     if (std.ascii.eqlIgnoreCase(arg, "EXP")) {
                         if (i + 1 >= args_temp_alloc.items.len) {
                             try stdout.print("Missing seconds for EXP option (must be u64 integer)\n", .{});
-                            continue :shell_loop; // FIX: Continue the labeled loop
+                            continue :shell_loop;
                         }
                         const seconds_str = args_temp_alloc.items[i + 1];
                         expiry_seconds_from_now = std.fmt.parseInt(u64, seconds_str, 10) catch {
                             try stdout.print("Invalid seconds for EXP option (must be u64 integer)\n", .{});
-                            continue :shell_loop; // FIX: Continue the labeled loop
+                            continue :shell_loop;
                         };
                         i += 1;
                     } else if (std.ascii.eqlIgnoreCase(arg, "TYPE")) {
                         if (i + 1 >= args_temp_alloc.items.len) {
                             try stdout.print("Missing type for TYPE option (STRING, INT, FLOAT, BOOL, BINARY, TIMESTAMP)\n", .{});
-                            continue :shell_loop; // FIX: Continue the labeled loop
+                            continue :shell_loop;
                         }
                         const type_str = args_temp_alloc.items[i + 1];
                         if (std.ascii.eqlIgnoreCase(type_str, "STRING")) {
@@ -193,7 +193,7 @@ pub fn main() !void {
                         val_str = arg;
                     } else {
                         try stdout.print("Too many values or unexpected argument: {s}\n", .{arg});
-                        continue :shell_loop; // FIX: Continue the labeled loop
+                        continue :shell_loop;
                     }
                 }
 

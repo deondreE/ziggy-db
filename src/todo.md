@@ -30,6 +30,13 @@
 
 - Problem: Keys persist forever.
 
+- [X] Done
+4. Default expire on creation (TTL)
+
+- Problem: Keys persist forever.
+
+- [ ] Done
+
 Action:
 
 - Add expires_at: ?u64 (Unix timestamp).
@@ -47,7 +54,7 @@ Action:
 
 - Problem: Limited to simple strings, numbers, bools, and basic lists of strings.
 - Action:
-  - Timestamps/Dates: Add a ValueType.Timestamp and store u64 (Unix epoch time).
+  -  [X] Timestamps/Dates: Add a ValueType.Timestamp and store u64 (Unix epoch time).
 
   - JSON/Structured Data: Add ValueType.JSON and store []const u8 (JSON string). Require parsing/validation.
 
