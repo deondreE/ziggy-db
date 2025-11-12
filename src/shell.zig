@@ -32,7 +32,25 @@ fn parseCommand(tok: []const u8) Command {
     return .unknown;
 }
 
+fn enableWindowsAnsiColors() void {
+    if (@import("builtin").os.tag == .windows) {
+        const windows = std.os.windows;
+        const ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+        const STD_OUTPUT_HANDLE: windows.DWORD = @bitCast(@as(i32, -11));
+
+        const handle = windows.kernel32.GetStdHandle(STD_OUTPUT_HANDLE) orelse return;
+        if (handle == windows.INVALID_HANDLE_VALUE) return;
+
+        var mode: windows.DWORD = 0;
+        if (windows.kernel32.GetConsoleMode(handle, &mode) == 0) return;
+
+        mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        _ = windows.kernel32.SetConsoleMode(handle, mode);
+    }
+}
+
 pub fn main() !void {
+    enableWindowsAnsiColors();
     var stdout_buffer: [1024]u8 = undefined;
     var stdin_buffer: [1024]u8 = undefined;
 
@@ -53,10 +71,28 @@ pub fn main() !void {
     var db = try dbmod.Database.init(alloc, conn_str);
     defer db.deinit();
 
-    try stdout.print("Welcome to ZiggyDB shell (Zig 0.15.2)\n", .{});
-    try stdout.print("Type HELP for commands, EXIT to quit.\n\n", .{});
-    try stdout.flush();
+    const YELLOW = "\x1b[33m";
+    const RESET = "\x1b[0m";
 
+    try stdout.print(
+        \\
+        \\  ╔════════════════════════════════════════╗
+        \\  ║                                        ║
+        \\  ║   {s}███████╗██╗ ██████╗  ██████╗██╗   ██╗{s}║
+        \\  ║   {s}╚══███╔╝██║██╔════╝ ██╔════╝╚██╗ ██╔╝{s}║
+        \\  ║   {s}  ███╔╝ ██║██║  ███╗██║  ███╗╚████╔╝{s} ║
+        \\  ║   {s} ███╔╝  ██║██║   ██║██║   ██║ ╚██╔╝{s}  ║
+        \\  ║   {s}███████╗██║╚██████╔╝╚██████╔╝  ██║{s}   ║
+        \\  ║   {s}╚══════╝╚═╝ ╚═════╝  ╚═════╝   ╚═╝{s}   ║
+        \\  ║                                 DB     ║
+        \\  ║                                        ║
+        \\  ╚════════════════════════════════════════╝
+        \\
+        \\  Welcome to ZiggyDB shell (Zig 0.15.2)
+        \\  Type HELP for commands, EXIT to quit.
+        \\
+        \\
+    , .{ YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET });
     while (true) {
         try stdout.print("ziggy> ", .{});
         try stdout.flush();
