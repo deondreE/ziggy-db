@@ -215,7 +215,7 @@ pub const Database = struct {
             },
             .Timestamp => blk: {
                 std.mem.writeInt(u64, &raw_buf, v.Timestamp, .little);
-                break :blk raw_buf[0..0];
+                break :blk raw_buf[0..8];
             }
         };
 
@@ -476,6 +476,10 @@ pub const Database = struct {
 
     pub fn setBool(self: *Database, key: []const u8, v: bool) !void {
         try self.setTyped(key, Value{ .Bool = v }, null);
+    }
+
+    pub fn setTimestamp(self: *Database, key: []const u8, v: u64) !void {
+        try self.setTyped(key, Value{ .Timestamp =  v}, null);
     }
 
     pub fn del(self: *Database, key: []const u8) !bool {

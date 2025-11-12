@@ -118,7 +118,7 @@ test "list LPUSH / LPOP / LRANGE" {
     try std.testing.expectEqualStrings("three", list_val.?.Binary);
 }
 
-test "typed values - Integer, Float, Bool" {
+test "typed values - Integer, Float, Bool, Timestamp" {
     cleanupTestFile("tests/test_types.log");
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -147,6 +147,16 @@ test "typed values - Integer, Float, Bool" {
     const active_val = db.get("active").?;
     try std.testing.expect(active_val == .Bool);
     try std.testing.expect(active_val.Bool);
+
+    // Test Timestamp
+    const test_timestamp_key = "event_time";
+    const test_timestamp_value: u64 = 1678838400;
+
+    try db.setTyped(test_timestamp_key, dbmod.Value{ .Timestamp = test_timestamp_value }, null);
+
+    const event_time = db.get(test_timestamp_key).?;
+    try std.testing.expect(event_time == .Timestamp);
+    try std.testing.expectEqual(@as(u64, test_timestamp_value), event_time.Timestamp);
 }
 
 test "WAL replay reproduces correct data" {
