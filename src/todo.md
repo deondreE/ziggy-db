@@ -14,6 +14,7 @@
 
 - Problem: Value.Binary is currently used for arbitrary binary data, but printValue and shell.get use {s} which implies UTF-8. If truly arbitrary binary data is stored, this could print garbage or error.
 
+5. Fix platform dependent windows code.
 
 ## Extended Data Types && Advanced Features
 

@@ -7,14 +7,19 @@ pub const LogEntry = @import("wal_log.zig").LogEntry;
 pub const Value = @import("wal_log.zig").Value;
 pub const ValueType = @import("wal_log.zig").ValueType;
 
+pub const ValueWithMetadata = struct {
+    value: Value,
+    expiry_unix_s: ?u64,
+};
+
 pub const Database = struct {
-    map: std.StringHashMap(Value),
+    map: std.StringHashMap(ValueWithMetadata),
     lists: std.StringHashMap(std.array_list.Managed([]const u8)),
     allocator: std.mem.Allocator,
     log_file: std.fs.File,
     file_path: []const u8,
     in_tx: bool = false,
-    tx_map: ?std.StringHashMap(Value) = null,
+    tx_map: ?std.StringHashMap(ValueWithMetadata) = null,
     replaying: bool = false,
 
     fn writeWalHeader(file: std.fs.File) !void {
@@ -44,7 +49,8 @@ pub const Database = struct {
             std.debug.print("Unsupported WAL version: {d} (expected {d})\n", .{ version, WAL_VERSION });
             return error.UnsupportedWalVersion;
         }
-        if (std.Target.Os.Tag == .windows) {
+
+        if (@import("builtin").os.tag == .windows) {
             _ = std.os.windows.kernel32.SetConsoleOutputCP(65001); // UTF-8
         }
         std.debug.print("{s} Valid WAL file (version {d})\n", .{ "✓", version });
@@ -65,7 +71,7 @@ pub const Database = struct {
         errdefer log_file.close();
 
         var db = Database{
-            .map = std.StringHashMap(Value).init(allocator),
+            .map = std.StringHashMap(ValueWithMetadata).init(allocator),
             .lists = std.StringHashMap(std.array_list.Managed([]const u8)).init(allocator),
             .allocator = allocator,
             .log_file = log_file,
@@ -94,21 +100,28 @@ pub const Database = struct {
                             .Float => Value{ .Float = @bitCast(std.mem.readInt(u64, s_entry.raw_value[0..8], .little)) },
                             .Bool => Value{ .Bool = s_entry.raw_value[0] != 0 },
                             .Binary => Value{ .Binary = try allocator.dupe(u8, s_entry.raw_value) },
+                            .Timestamp => Value{.Timestamp =  std.mem.readInt(u64, s_entry.raw_value[0..8], .little) },
+                        };
+
+                        const key_copy = try allocator.dupe(u8, s_entry.key);
+                        const val_meta = ValueWithMetadata{
+                            .value = val,
+                            .expiry_unix_s = s_entry.expiry_unix_s,
                         };
 
                         if (db.map.fetchRemove(s_entry.key)) |old| {
                             db.allocator.free(old.key);
-                            freeValue(db.allocator, old.value);
+                            freeValueWithMetadata(db.allocator, old.value);
                         }
 
-                        try db.map.put(try allocator.dupe(u8, s_entry.key), val);
+                        try db.map.put(key_copy, val_meta);
                         allocator.free(s_entry.key);
                         allocator.free(s_entry.raw_value);
                     },
                     .Delete => |d_entry| {
                         if (db.map.fetchRemove(d_entry.key)) |removed| {
                             db.allocator.free(removed.key);
-                            freeValue(allocator, removed.value);
+                            freeValueWithMetadata(allocator, removed.value);
                         }
                         // Free the temporary key buffer since we don't need it
                         db.allocator.free(d_entry.key);
@@ -154,7 +167,7 @@ pub const Database = struct {
             var it = tx.iterator();
             while (it.next()) |entry| {
                 self.allocator.free(entry.key_ptr.*);
-                freeValue(self.allocator, entry.value_ptr.*);
+                freeValueWithMetadata(self.allocator, entry.value_ptr.*);
             }
             tx.deinit();
         }
@@ -174,7 +187,7 @@ pub const Database = struct {
         var it = self.map.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            freeValue(self.allocator, entry.value_ptr.*);
+            freeValueWithMetadata(self.allocator, entry.value_ptr.*);
         }
 
         self.map.deinit();
@@ -182,7 +195,7 @@ pub const Database = struct {
         self.allocator.free(self.file_path);
     }
 
-    pub fn setTyped(self: *Database, key: []const u8, v: Value) !void {
+    pub fn setTyped(self: *Database, key: []const u8, v: Value, expiry_unix_s: ?u64) !void {
         var raw_buf: [8]u8 = undefined;
         const tmp: []const u8 = switch (v) {
             .String => v.String,
@@ -200,6 +213,10 @@ pub const Database = struct {
                 raw_buf[0] = if (v.Bool) 1 else 0;
                 break :blk raw_buf[0..1];
             },
+            .Timestamp => blk: {
+                std.mem.writeInt(u64, &raw_buf, v.Timestamp, .little);
+                break :blk raw_buf[0..0];
+            }
         };
 
         const val_type = switch (v) {
@@ -208,7 +225,14 @@ pub const Database = struct {
             .Float => ValueType.Float,
             .Bool => ValueType.Bool,
             .Binary => ValueType.Binary,
+            .Timestamp => ValueType.Timestamp,
         };
+
+        var final_time: ?u64 = null;
+        if (expiry_unix_s) |sec| {
+            const current_time_s: u64 = @intCast(std.time.timestamp());
+            final_time = current_time_s + sec;
+        }
 
         const log_entry = LogEntry{
             .Set = .{
@@ -217,6 +241,7 @@ pub const Database = struct {
                 .key = key,
                 .value_len = @intCast(tmp.len),
                 .raw_value = tmp,
+                .expiry_unix_s = final_time,
             },
         };
 
@@ -228,14 +253,17 @@ pub const Database = struct {
 
         if (self.map.fetchRemove(key)) |old| {
             self.allocator.free(old.key);
-            freeValue(self.allocator, old.value);
+            freeValueWithMetadata(self.allocator, old.value);
         }
-        const new_val = try dupValue(self.allocator, v);
+        const new_val = ValueWithMetadata{
+            .value = try dupValue(self.allocator, v),
+            .expiry_unix_s = expiry_unix_s,
+        };
         try self.map.put(try self.allocator.dupe(u8, key), new_val);
     }
 
     pub fn lpush(self: *Database, key: []const u8, value: []const u8) !void {
-        try self.setTyped(key, Value{ .Binary = value });
+        try self.setTyped(key, Value{ .Binary = value }, null);
     }
 
     pub fn lpop(self: *Database, key: []const u8) !?[]const u8 {
@@ -275,12 +303,12 @@ pub const Database = struct {
     pub fn beginTransaction(self: *Database) !void {
         if (self.in_tx) return error.TransactionAlreadyActive;
         self.in_tx = true;
-        self.tx_map = std.StringHashMap(Value).init(self.allocator);
+        self.tx_map = std.StringHashMap(ValueWithMetadata).init(self.allocator);
 
         var it = self.map.iterator();
         while (it.next()) |entry| {
             const key_copy = try self.allocator.dupe(u8, entry.key_ptr.*);
-            const value_copy = try dupValue(self.allocator, entry.value_ptr.*);
+            const value_copy = try dupValueWithMetadata(self.allocator, entry.value_ptr.*);
             try self.tx_map.?.put(key_copy, value_copy);
         }
 
@@ -297,14 +325,16 @@ pub const Database = struct {
         var free_it = tx_map.iterator();
         while (free_it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            freeValue(self.allocator, entry.value_ptr.*);
+            freeValueWithMetadata(self.allocator, entry.value_ptr.*);
         }
         tx_map.deinit();
 
         var it = self.map.iterator();
         while (it.next()) |entry| {
-            const v = entry.value_ptr.*;
+            const v_meta = entry.value_ptr.*;
+            const v = v_meta.value;
             const key = entry.key_ptr.*;
+            const expiry_unix_s = v_meta.expiry_unix_s;
 
             var raw_buf: [8]u8 = undefined;
             const tmp: []const u8 = switch (v) {
@@ -323,6 +353,10 @@ pub const Database = struct {
                     raw_buf[0] = if (v.Bool) 1 else 0;
                     break :blk raw_buf[0..1];
                 },
+                .Timestamp => blk: {
+                    std.mem.writeInt(u64, &raw_buf, v.Timestamp, .little);
+                    break :blk raw_buf[0..8];
+                }
             };
 
             const val_type = switch (v) {
@@ -331,6 +365,7 @@ pub const Database = struct {
                 .Float => ValueType.Float,
                 .Bool => ValueType.Bool,
                 .Binary => ValueType.Binary,
+                .Timestamp => ValueType.Timestamp,
             };
 
             const log_entry = LogEntry{
@@ -340,6 +375,7 @@ pub const Database = struct {
                     .key = key,
                     .value_len = @intCast(tmp.len),
                     .raw_value = tmp,
+                    .expiry_unix_s = expiry_unix_s,
                 },
             };
 
@@ -357,21 +393,21 @@ pub const Database = struct {
         var it = self.map.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            freeValue(self.allocator, entry.value_ptr.*);
+            freeValueWithMetadata(self.allocator, entry.value_ptr.*);
         }
         self.map.clearRetainingCapacity();
 
         var tx_it = tx.iterator();
         while (tx_it.next()) |entry| {
             const key_copy = self.allocator.dupe(u8, entry.key_ptr.*) catch unreachable;
-            const val_copy = dupValue(self.allocator, entry.value_ptr.*) catch unreachable;
+            const val_copy = dupValueWithMetadata(self.allocator, entry.value_ptr.*) catch unreachable;
             self.map.put(key_copy, val_copy) catch unreachable;
         }
 
         var free_it = tx.iterator();
         while (free_it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            freeValue(self.allocator, entry.value_ptr.*);
+            freeValueWithMetadata(self.allocator, entry.value_ptr.*);
         }
         tx.deinit();
 
@@ -398,34 +434,48 @@ pub const Database = struct {
     fn deleteInMemory(self: *Database, key: []const u8) bool {
         if (self.map.fetchRemove(key)) |removed| {
             self.allocator.free(removed.key);
-            freeValue(self.allocator, removed.value);
+            freeValueWithMetadata(self.allocator, removed.value);
             return true;
         }
         return false;
     }
 
     pub fn set(self: *Database, key: []const u8, value: []const u8) !void {
-        try self.setTyped(key, Value{ .String = value });
+        try self.setTyped(key, Value{ .String = value }, null);
     }
 
     pub fn get(self: *Database, key: []const u8) ?Value {
-        return self.map.get(key);
+        if (self.map.get(key)) |val_meta| {
+            if (val_meta.expiry_unix_s) |expiry| {
+                const current_time_s: u64 = @intCast(std.time.timestamp());
+                if (current_time_s >= expiry) {
+                    if (!self.in_tx and !self.replaying) {
+                        _ = self.del(key) catch {};
+                    } else if (self.in_tx) {
+                        _ = self.deleteInMemory(key);
+                    }
+                }
+                return null;
+            }
+            return val_meta.value;
+        }
+        return null;
     }
 
     pub fn setString(self: *Database, key: []const u8, v: []const u8) !void {
-        try self.setTyped(key, Value{ .String = v });
+        try self.setTyped(key, Value{ .String = v }, null);
     }
 
     pub fn setInt(self: *Database, key: []const u8, v: i64) !void {
-        try self.setTyped(key, Value{ .Integer = v });
+        try self.setTyped(key, Value{ .Integer = v }, null);
     }
 
     pub fn setFloat(self: *Database, key: []const u8, v: f64) !void {
-        try self.setTyped(key, Value{ .Float = v });
+        try self.setTyped(key, Value{ .Float = v }, null);
     }
 
     pub fn setBool(self: *Database, key: []const u8, v: bool) !void {
-        try self.setTyped(key, Value{ .Bool = v });
+        try self.setTyped(key, Value{ .Bool = v }, null);
     }
 
     pub fn del(self: *Database, key: []const u8) !bool {
@@ -451,6 +501,7 @@ pub const Database = struct {
             .Integer => Value{ .Integer = v.Integer },
             .Float => Value{ .Float = v.Float },
             .Bool => Value{ .Bool = v.Bool },
+            .Timestamp => Value { .Timestamp = v.Timestamp },
         };
     }
 
@@ -461,4 +512,82 @@ pub const Database = struct {
             else => {},
         }
     }
+
+    pub fn dupValueWithMetadata(a: std.mem.Allocator, vwm: ValueWithMetadata) !ValueWithMetadata {
+        return ValueWithMetadata{
+            .value = try dupValue(a, vwm.value),
+            .expiry_unix_s = vwm.expiry_unix_s,
+        };
+    }
+
+    pub fn freeValueWithMetadata(a: std.mem.Allocator, vwm: ValueWithMetadata) void {
+        freeValue(a, vwm.value);
+    }
 };
+
+
+pub fn printValue(value: Value) void {
+    const YELLOW = "\x1b[33m"; // Define colors here for printValue's specific usage
+    const MAGENTA = "\x1b[35m";
+    const BLUE = "\x1b[34m";
+    const CYAN = "\x1b[36m";
+    const RESET = "\x1b[0m";
+
+    switch (value) {
+        .String => |s| std.debug.print("{s}{s}{s}", .{BLUE, s, RESET}),
+        .Integer => |i| std.debug.print("{s}{d}{s}", .{YELLOW, i, RESET}),
+        .Float => |f| std.debug.print("{s}{d:.2}{s}", .{YELLOW, f, RESET}),
+        .Bool => |b| std.debug.print("{s}{}{s}", .{MAGENTA, b, RESET}),
+        .Binary => |b| {
+            std.debug.print("{s}Binary[{d} bytes]: {s}", .{CYAN, b.len, RESET});
+            // Print a hex representation for binary data, more robust than just '.'
+            // Or if you prefer printable characters and '.' for others
+            // for (b) |byte| {
+            //     if (byte >= 32 and byte < 127) {
+            //         std.debug.print("{c}", .{byte});
+            //     } else {
+            //         std.debug.print(".", .{});
+            //     }
+            // }
+            // For true binary, hex dump is generally better
+            for (b) |byte| {
+                std.debug.print("\\x{x:0>2}", .{byte});
+            }
+        },
+        .Timestamp => |ts| {
+            // Re-using the robust timestamp formatting logic
+            var buf: [64]u8 = undefined; // Buffer for formatted timestamp string
+
+            const current_year: u64 = 1970; // Unix epoch year
+            const SECONDS_IN_YEAR: u64 = 31536000;
+            const SECONDS_IN_DAY: u64 = 86400;
+            const SECONDS_IN_HOUR: u64 = 3600;
+            const SECONDS_IN_MINUTE: u64 = 60;
+
+            var remaining_seconds = ts;
+
+            const years_since_epoch = remaining_seconds / SECONDS_IN_YEAR;
+            const year = current_year + years_since_epoch;
+            remaining_seconds %= SECONDS_IN_YEAR;
+
+            const days_since_year_start = remaining_seconds / SECONDS_IN_DAY;
+            const month_approx = (days_since_year_start / 30) + 1; // Very rough month
+            const day_approx = (days_since_year_start % 30) + 1; // Very rough day
+            remaining_seconds %= SECONDS_IN_DAY;
+
+            const hours = remaining_seconds / SECONDS_IN_HOUR;
+            remaining_seconds %= SECONDS_IN_HOUR;
+
+            const minutes = remaining_seconds / SECONDS_IN_MINUTE;
+            remaining_seconds %= SECONDS_IN_MINUTE;
+
+            const seconds = remaining_seconds;
+
+            const formatted_ts = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{
+                year, month_approx, day_approx, hours, minutes, seconds
+            }) catch "ERR_TS_FORMAT";
+
+            std.debug.print("{s}{s}{s} {s}(Unix: {d}){s}", .{ MAGENTA, formatted_ts, RESET, BLUE, ts, RESET });
+        },
+    }
+}

@@ -152,14 +152,9 @@ pub fn main() !void {
                     continue;
                 };
                 if (db.get(key)) |v| {
-                    switch (v) {
-                        .String => |s| try stdout.print("{s}\n", .{s}),
-                        .Integer => |i| try stdout.print("{d}\n", .{i}),
-                        .Float => |f| try stdout.print("{d}\n", .{f}),
-                        .Bool => |b| try stdout.print("{}\n", .{b}),
-                        .Binary => |b| try stdout.print("{s}\n", .{b}),
-                    }
-                } else try stdout.print("(nil)\n", .{});
+                    dbmod.printValue(v);
+                    std.debug.print("\n", .{});
+                }
             },
             .del => {
                 const key = toks.next() orelse {

@@ -13,6 +13,7 @@ pub const ValueType = enum(u8) {
     Float,
     Bool,
     Binary,
+    Timestamp,
 };
 
 pub const Value = union(ValueType) {
@@ -21,10 +22,18 @@ pub const Value = union(ValueType) {
     Float: f64,
     Bool: bool,
     Binary: []const u8,
+    Timestamp: u64,
 };
 
 pub const LogEntry = union(OperationType) {
-    Set: struct { val_type: ValueType, key_len: u32, key: []const u8, value_len: u32, raw_value: []const u8 },
+    Set: struct {
+        val_type: ValueType,
+        key_len: u32,
+        key: []const u8,
+        value_len: u32,
+        raw_value: []const u8,
+        expiry_unix_s: ?u64,
+    },
     Delete: struct {
         key_len: u32,
         key: []const u8,
@@ -57,6 +66,19 @@ pub const LogEntry = union(OperationType) {
                 try file.writeAll(&buf4);
                 try file.writeAll(s_entry.key);
                 try file.writeAll(s_entry.raw_value);
+
+                // Expiry
+                var has_expiry_byte: [1]u8 = undefined;
+                if (s_entry.expiry_unix_s) |expiry| {
+                    has_expiry_byte[0] = 1;
+                    try file.writeAll(&has_expiry_byte);
+                    var buf8: [8]u8 = undefined;
+                    std.mem.writeInt(u64, &buf8, expiry, .little);
+                    try file.writeAll(&buf8);
+                } else {
+                    has_expiry_byte[0] = 0;
+                    try file.writeAll(&has_expiry_byte);
+                }
             },
             .Delete => |d_entry| {
                 std.mem.writeInt(u32, &buf4, d_entry.key_len, .little);
@@ -107,6 +129,15 @@ pub const LogEntry = union(OperationType) {
                 errdefer allocator.free(val);
                 if (try file.readAll(val) < val_len) return error.EndOfStream;
 
+                var has_expiry_byte: [1]u8 = undefined;
+                if (try file.readAll(&has_expiry_byte) < 1) return error.EndOfStream;
+                var expiry_unix_s: ?u64 = null;
+                if (has_expiry_byte[0] == 1) {
+                    var buf8: [8]u8 = undefined;
+                    if (try file.readAll(&buf8) < 1) return error.EndOfStream;
+                    expiry_unix_s = std.mem.readInt(u64, &buf8, .little);
+                }
+
                 return .{
                     .Set = .{
                         .val_type = vt,
@@ -114,6 +145,7 @@ pub const LogEntry = union(OperationType) {
                         .key = key,
                         .value_len = val_len,
                         .raw_value = val,
+                        .expiry_unix_s = expiry_unix_s,
                     },
                 };
             },
@@ -178,57 +210,130 @@ pub const LogEntry = union(OperationType) {
         const BOLD = "\x1b[1m";
         const RESET = "\x1b[0m";
         const DIM = "\x1b[2m";
+        const GREY = "\x1b[90m";
 
         std.debug.print("{s}╭───────────┬───────────────┬───────────────────────╮{s}\n", .{ DIM, RESET });
-        std.debug.print("{s}│{s} {s}Operation{s} {s}│{s} {s}Key{s}           {s}│{s} {s}Value{s}                 {s}│{s}\n", .{ DIM, RESET, BOLD, RESET, DIM, RESET, BOLD, RESET, DIM, RESET, BOLD, RESET, DIM, RESET });
+        std.debug.print("{s}│{s} {s}Operation{s} {s}│{s} {s}Key{s}           {s}│{s} {s}Value{s}                 {s}│{s}\n", .{
+            DIM,
+            RESET,
+            BOLD,
+            RESET,
+            DIM,
+            RESET,
+            BOLD,
+            RESET,
+            DIM,
+            RESET,
+            BOLD,
+            RESET,
+            DIM,
+            RESET,
+        });
         std.debug.print("{s}├───────────┼───────────────┼───────────────────────┤{s}\n", .{ DIM, RESET });
 
         switch (self) {
             .Set => |s_entry| {
                 std.debug.print("{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} ", .{ DIM, RESET, GREEN, "Set", RESET, DIM, RESET, CYAN, s_entry.key, RESET, DIM, RESET });
 
-                var printed = false;
+                var actual_content_len: usize = 0;
+                const value_column_width: usize = 21;
 
-                if (s_entry.raw_value.len == 8) {
-                    const bits = std.mem.readInt(u64, s_entry.raw_value[0..8], .little);
-                    const float_val: f64 = @bitCast(bits);
-                    const int_val: i64 = @bitCast(bits);
+                switch (s_entry.val_type) {
+                    .String => {
+                        std.debug.print("{s}{s}{s}", .{ BLUE, s_entry.raw_value, RESET });
+                        actual_content_len = s_entry.raw_value.len;
+                    },
+                    .Integer => {
+                        const int_val = std.mem.readInt(i64, s_entry.raw_value[0..8], .little);
+                        var buf: [32]u8 = undefined;
+                        const formatted = std.fmt.bufPrint(&buf, "{d}", .{int_val}) catch "ERR";
+                        std.debug.print("{s}{s}{s}", .{ YELLOW, formatted, RESET });
+                        actual_content_len = formatted.len;
+                    },
+                    .Float => {
+                        const float_val: f64 = @bitCast(std.mem.readInt(u64, s_entry.raw_value[0..8], .little));
+                        var buf: [32]u8 = undefined;
+                        const formatted = std.fmt.bufPrint(&buf, "{d:.2}", .{float_val}) catch "ERR";
+                        std.debug.print("{s}{s}{s}", .{ YELLOW, formatted, RESET });
+                        actual_content_len = formatted.len;
+                    },
+                    .Bool => {
+                        const bool_val = s_entry.raw_value[0] != 0;
+                        const bool_str = if (bool_val) "true" else "false";
+                        std.debug.print("{s}{s}{s}", .{ MAGENTA, bool_str, RESET });
+                        actual_content_len = bool_str.len;
+                    },
+                    .Binary => {
+                        std.debug.print("{s}", .{BLUE});
+                        var count_visible: usize = 0;
+                        for (s_entry.raw_value) |b| {
+                            if (b >= 32 and b < 127) {
+                                std.debug.print("{c}", .{b});
+                                count_visible += 1;
+                            } else {
+                                std.debug.print(".", .{});
+                                count_visible += 1;
+                            }
+                        }
+                        std.debug.print("{s}", .{RESET});
+                        actual_content_len = count_visible;
+                    },
+                    .Timestamp => {
+                        const ts_val = std.mem.readInt(u64, s_entry.raw_value[0..8], .little);
+                        var buf: [64]u8 = undefined;
 
-                    const abs_float = @abs(float_val);
-                    if (std.math.isNan(float_val) or std.math.isInf(float_val) or
-                        abs_float < 1e-100 or abs_float > 1e100)
-                        {
-                            std.debug.print("{s}{d:<21}{s} {s}│{s}\n", .{ YELLOW, int_val, RESET, DIM, RESET });
-                            printed = true;
-                        } else {
-                        std.debug.print("{s}{d:<21.2}{s} {s}│{s}\n", .{ YELLOW, float_val, RESET, DIM, RESET });
-                        printed = true;
-                    }
-                } else if (s_entry.raw_value.len == 1) {
-                    const bool_val = s_entry.raw_value[0] != 0;
-                    const bool_str = if (bool_val) "true" else "false";
-                    std.debug.print("{s}{s:<21}{s} {s}│{s}\n", .{ MAGENTA, bool_str, RESET, DIM, RESET });
-                    printed = true;
+                        const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = ts_val };
+                        const epoch_day = epoch_seconds.getEpochDay();
+                        const day_seconds = epoch_seconds.getDaySeconds();
+                        const year_day = epoch_day.calculateYearDay();
+                        const month_day = year_day.calculateMonthDay();
+
+                        const year = year_day.year;
+                        const month = @intFromEnum(month_day.month);
+                        const day = month_day.day_index + 1;
+                        const hours = day_seconds.getHoursIntoDay();
+                        const minutes = day_seconds.getMinutesIntoHour();
+                        const seconds = day_seconds.getSecondsIntoMinute();
+
+                        const formatted_ts = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{ year, month, day, hours, minutes, seconds }) catch "ERR_TS_FORMAT";
+                        std.debug.print("{s}{s}{s}", .{ MAGENTA, formatted_ts, RESET });
+                        actual_content_len = formatted_ts.len;
+                    },
                 }
 
-                if (!printed) {
-                    std.debug.print("{s}", .{BLUE});
-                    for (s_entry.raw_value) |b| {
-                        if (b >= 32 and b < 127) {
-                            std.debug.print("{c}", .{b});
-                        } else {
-                            std.debug.print(".", .{});
-                        }
+                if (actual_content_len < value_column_width) {
+                    var i: usize = 0;
+                    while (i < (value_column_width - actual_content_len)) : (i += 1) {
+                        std.debug.print(" ", .{});
+                    }
+                }
+                std.debug.print("{s}│{s}\n", .{ DIM, RESET });
+
+                if (s_entry.expiry_unix_s) |expiry| {
+                    const current_time_s: u64 = @intCast(std.time.timestamp());
+
+                    std.debug.print("{s}│{s}           {s}│{s}               {s}│{s} ", .{ DIM, RESET, DIM, RESET, DIM, RESET });
+
+                    var expiry_message_buf: [64]u8 = undefined;
+                    var expiry_content_len: usize = 0;
+
+                    if (current_time_s >= expiry) {
+                        const msg = std.fmt.bufPrint(&expiry_message_buf, "EXPIRED @ {d}", .{expiry}) catch "ERR";
+                        std.debug.print("{s}{s}{s}", .{ RED, msg, RESET });
+                        expiry_content_len = msg.len;
+                    } else {
+                        const msg = std.fmt.bufPrint(&expiry_message_buf, "Expires @ {d}", .{expiry}) catch "ERR";
+                        std.debug.print("{s}{s}{s}", .{ GREY, msg, RESET });
+                        expiry_content_len = msg.len;
                     }
 
-                    const val_len = s_entry.raw_value.len;
-                    if (val_len < 21) {
+                    if (expiry_content_len < value_column_width) {
                         var i: usize = 0;
-                        while (i < (21 - val_len)) : (i += 1) {
+                        while (i < (value_column_width - expiry_content_len)) : (i += 1) {
                             std.debug.print(" ", .{});
                         }
                     }
-                    std.debug.print("{s} {s}│{s}\n", .{ RESET, DIM, RESET });
+                    std.debug.print("{s}│{s}\n", .{ DIM, RESET });
                 }
             },
             .Delete => |d_entry| {
