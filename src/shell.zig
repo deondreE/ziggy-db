@@ -96,7 +96,8 @@ pub fn main() !void {
         \\
         \\
     , .{ YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, CYAN, RESET, YELLOW, RESET });
-    while (true) {
+
+    shell_loop: while (true) { // FIX: Labeled while loop
         try stdout.print("ziggy> ", .{});
         try stdout.flush();
 
@@ -104,24 +105,24 @@ pub fn main() !void {
             error.ReadFailed => return err,
             error.StreamTooLong => {
                 try stdout.print("Line too long.\n", .{});
-                continue;
+                continue :shell_loop;
             },
         };
 
         const line = maybe_line orelse break;
 
         const trimmed = std.mem.trim(u8, line, " \r\t");
-        if (trimmed.len == 0) continue;
+        if (trimmed.len == 0) continue :shell_loop;
 
         var toks = std.mem.tokenizeAny(u8, trimmed, " ");
-        const cmd_tok = toks.next() orelse continue;
+        const cmd_tok = toks.next() orelse continue :shell_loop;
         const command = parseCommand(cmd_tok);
 
         switch (command) {
             .help => {
                 try stdout.print(
                     \\Commands:
-                    \\  SET key value
+                    \\  SET key value [EXP seconds] [TYPE <STRING|INT|FLOAT|BOOL|BINARY|TIMESTAMP>]
                     \\  GET key
                     \\  DEL key
                     \\  LPUSH key value [value ...]
@@ -136,30 +137,102 @@ pub fn main() !void {
             .set => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
-                    continue;
+                    continue :shell_loop; // FIX: Continue the labeled loop
                 };
-                const val = toks.rest();
-                if (val.len == 0) {
+
+                var val_str: ?[]const u8 = null;
+                var expiry_seconds_from_now: ?u64 = null;
+                var value_type: dbmod.ValueType = dbmod.ValueType.String; // String by default;
+
+                var args_temp_alloc = std.array_list.Managed([]const u8).init(alloc);
+                defer args_temp_alloc.deinit();
+
+                while (toks.next()) |tok| {
+                    try args_temp_alloc.append(tok);
+                }
+
+                var i: usize = 0;
+                while (i < args_temp_alloc.items.len) : (i += 1) {
+                    const arg = args_temp_alloc.items[i];
+                    if (std.ascii.eqlIgnoreCase(arg, "EXP")) {
+                        if (i + 1 >= args_temp_alloc.items.len) {
+                            try stdout.print("Missing seconds for EXP option (must be u64 integer)\n", .{});
+                            continue :shell_loop; // FIX: Continue the labeled loop
+                        }
+                        const seconds_str = args_temp_alloc.items[i + 1];
+                        expiry_seconds_from_now = std.fmt.parseInt(u64, seconds_str, 10) catch {
+                            try stdout.print("Invalid seconds for EXP option (must be u64 integer)\n", .{});
+                            continue :shell_loop; // FIX: Continue the labeled loop
+                        };
+                        i += 1;
+                    } else if (std.ascii.eqlIgnoreCase(arg, "TYPE")) {
+                        if (i + 1 >= args_temp_alloc.items.len) {
+                            try stdout.print("Missing type for TYPE option (STRING, INT, FLOAT, BOOL, BINARY, TIMESTAMP)\n", .{});
+                            continue :shell_loop; // FIX: Continue the labeled loop
+                        }
+                        const type_str = args_temp_alloc.items[i + 1];
+                        if (std.ascii.eqlIgnoreCase(type_str, "STRING")) {
+                            value_type = dbmod.ValueType.String;
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "INT")) {
+                            value_type = dbmod.ValueType.Integer;
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "FLOAT")) {
+                            value_type = dbmod.ValueType.Float;
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "BOOL")) {
+                            value_type = dbmod.ValueType.Bool;
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "BINARY")) {
+                            value_type = dbmod.ValueType.Binary;
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "TIMESTAMP")) {
+                            value_type = dbmod.ValueType.Timestamp;
+                        } else {
+                            try stdout.print("Unknown type: {s} (expected STRING, INT, FLOAT, BOOL, BINARY, TIMESTAMP)\n", .{type_str});
+                            continue :shell_loop;
+                        }
+                        i += 1; // Consume the type argument
+                    } else if (val_str == null) {
+                        // This is the actual value argument
+                        val_str = arg;
+                    } else {
+                        try stdout.print("Too many values or unexpected argument: {s}\n", .{arg});
+                        continue :shell_loop; // FIX: Continue the labeled loop
+                    }
+                }
+
+                if (val_str == null) {
                     try stdout.print("Missing value\n", .{});
                 } else {
-                    try db.set(key, val);
+                    const value_to_set: dbmod.Value = switch (value_type) {
+                        .String => dbmod.Value{ .String = val_str.? },
+                        .Integer => dbmod.Value{ .Integer = try std.fmt.parseInt(i64, val_str.?, 10) },
+                        .Float => dbmod.Value{ .Float = try std.fmt.parseFloat(f64, val_str.?) },
+                        .Bool => if (std.ascii.eqlIgnoreCase(val_str.?, "true")) dbmod.Value{ .Bool = true } else dbmod.Value{ .Bool = false },
+                        .Binary => dbmod.Value{ .Binary = val_str.? },
+                        .Timestamp => dbmod.Value{ .Timestamp = try std.fmt.parseInt(u64, val_str.?, 10) },
+                    };
+
+                    var final_expiry_unix_s: ?u64 = null;
+                    if (expiry_seconds_from_now) |sec| {
+                        const current_time: u64 = @intCast(std.time.timestamp());
+                        final_expiry_unix_s = current_time + sec;
+                    }
+
+                    try db.setTyped(key, value_to_set, final_expiry_unix_s);
                     try stdout.print("OK\n", .{});
                 }
             },
             .get => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
-                    continue;
+                    continue :shell_loop;
                 };
                 if (db.get(key)) |v| {
                     dbmod.printValue(v);
-                    std.debug.print("\n", .{});
-                }
+                    try stdout.print("\n", .{});
+                } else try stdout.print("(nil)\n", .{});
             },
             .del => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
-                    continue;
+                    continue :shell_loop;
                 };
                 const ok = try db.del(key);
                 if (ok) try stdout.print("OK\n", .{}) else try stdout.print("(nil)\n", .{});
@@ -167,7 +240,7 @@ pub fn main() !void {
             .lpush => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
-                    continue;
+                    continue :shell_loop;
                 };
                 var n: usize = 0;
                 while (toks.next()) |v| {
@@ -179,7 +252,7 @@ pub fn main() !void {
             .lpop => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
-                    continue;
+                    continue :shell_loop;
                 };
                 const popped = try db.lpop(key);
                 if (popped) |p| {
@@ -190,7 +263,7 @@ pub fn main() !void {
             .lrange => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
-                    continue;
+                    continue :shell_loop;
                 };
                 const s_str = toks.next() orelse "0";
                 const e_str = toks.next() orelse "10";
