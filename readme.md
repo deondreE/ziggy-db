@@ -1,3 +1,53 @@
+## Phase 1 – In-Memory feature parity (Weeks 3-6)
+
+| Task | Notes |
+| ---- | ----- |
+| Strings (done) | ✅ |
+| Lists           | Ring buffer; LPUSH/LPOP/LRANGE |
+| Sets            | Hash table; SADD/SMEMBERS |
+| Sorted Sets     | Skip-list; ZADD/ZRANGE/ZSCORE |
+| Hashes          | Nested map; HSET/HGETALL |
+| LRU / LFU cache | Sampled eviction; `CONFIG SET maxmemory` |
+| Adaptive compression | Hot objects raw; cold objects Zstd-L2 |
+
+```typescript
+type Message = {
+    name: string;
+    message: string;
+};
+
+interface Schema extends DbSchema {
+    messages: Message[],
+    //....
+}
+
+function createMessage(sch: Schema): Message {
+    let message: Message = sch.push({ name: '', message: ' ' });
+}
+
+const init = () => {
+    let sch: Schema;
+    let connection = db.create({
+        schema: sch,
+    });
+    
+    connection.listen();
+}
+
+
+/*
+* Signal Stack
+* push_
+* pop_
+* list_push_
+* delete_
+* put_
+* 
+* */
+
+```
+
+
 Persistent storage
 
 - Append-only binary log (WAL). Every Set / Delete outside a transaction is serialized to disk.

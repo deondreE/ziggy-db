@@ -1,4 +1,5 @@
 const std = @import("std");
+const unicode = std.unicode;
 const WAL_MAGIC_NUMBER = @import("wal.zig").WAL_MAGIC_NUMBER;
 const WAL_VERSION = @import("wal.zig").WAL_VERSION;
 
@@ -267,6 +268,7 @@ pub const Database = struct {
     file_path: []const u8,
     in_tx: bool = false,
     tx_map: ?std.StringHashMap([]const u8) = null,
+    replaying: bool = false,
 
     fn writeWalHeader(file: std.fs.File) !void {
         var header: [6]u8 = undefined;
@@ -295,8 +297,8 @@ pub const Database = struct {
             std.debug.print("Unsupported WAL version: {d} (expected {d})\n", .{ version, WAL_VERSION });
             return error.UnsupportedWalVersion;
         }
-
-        std.debug.print("✓ Valid WAL file (version {d})\n", .{version});
+        _ = std.os.windows.kernel32.SetConsoleOutputCP(65001); // UTF-8
+        std.debug.print("{s} Valid WAL file (version {d})\n", .{"✓", version});
     }
 
     pub fn init(allocator: std.mem.Allocator, conn_str: ConnectionString) !Database {
@@ -324,15 +326,9 @@ pub const Database = struct {
 
         // Load existing log entries
         const file_size = (try db.log_file.stat()).size;
-        if (file_size > 0) {
+        if (file_size >= 6) {
             try db.log_file.seekTo(0);
-
-            if (file_size >= 6) {
-                try verifyWalHeader(db.log_file);
-            } else {
-                std.debug.print("Warning: File too small to contain valid WAL header\n", .{});
-                return error.InvalidWalFile;
-            }
+            try verifyWalHeader(db.log_file);
 
             while (true) {
                 const entry = LogEntry.deserialize(db.log_file, db.allocator) catch |err| {
@@ -366,7 +362,7 @@ pub const Database = struct {
                     },
                     .ListPush => |lp_entry| {
                         var list = db.lists.getPtr(lp_entry.key) orelse blk: {
-                            const new_list = std.array_list.Managed([]const u8).init(db.allocator);
+                            const new_list = std.array_list.Managed([]const u8).init(allocator);
                             try db.lists.put(
                                 try db.allocator.dupe(u8, lp_entry.key),
                                 new_list,
@@ -388,12 +384,13 @@ pub const Database = struct {
                         db.allocator.free(lp_entry.key);
                     },
                 }
+                db.replaying = false;
+                try db.log_file.seekTo(file_size);
+            }else {
+                std.debug.print("Warning: File too small to contain valid WAL header\n", .{});
+                return error.InvalidWalFile;
             }
-        }
 
-        // Position at end of file for appending new entries (only if not read-only)
-        if (!is_read_only) {
-            try db.log_file.seekTo(file_size);
         }
 
         return db;
@@ -441,7 +438,6 @@ pub const Database = struct {
                 .value = value,
             },
         };
-
         try log_entry.serialize(self.log_file);
         try self.log_file.sync();
 
@@ -483,9 +479,10 @@ pub const Database = struct {
     ) []const []const u8 {
         const list_ptr = self.lists.getPtr(key) orelse return &[_][]const u8{};
         const len = list_ptr.items.len;
+        if (len == 0 or start >= len) return &[_][]const u8{};
 
-        const s = if (start < len) start else len;
-        const e = if (stop < len) stop else len;
+        const s = start;
+        const e = if (stop > len) len else stop;
         return list_ptr.items[s..e];
     }
 
@@ -506,23 +503,20 @@ pub const Database = struct {
 
     pub fn commit(self: *Database) !void {
         if (!self.in_tx or self.tx_map == null) return error.NoTransaction;
-
-        // disable txn flag first so set()/del() become durable
         self.in_tx = false;
 
         var tx_map = self.tx_map.?;
 
-        // apply changes
         var it = tx_map.iterator();
         while (it.next()) |entry| {
-            const need_write =
-                self.map.get(entry.key_ptr.*) == null or
-                !std.mem.eql(u8, self.map.get(entry.key_ptr.*).?, entry.value_ptr.*);
-
-            if (need_write) try self.set(entry.key_ptr.*, entry.value_ptr.*);
+            const v = entry.value_ptr.*;
+            if (v.len == 0) {
+                _ = try self.del(entry.key_ptr.*);
+            } else {
+                try self.set(entry.key_ptr.*, v);
+            }
         }
 
-        // ---- free the snapshot buffers (leak fix) ----
         var free_it = tx_map.iterator();
         while (free_it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -536,30 +530,29 @@ pub const Database = struct {
 
     pub fn rollback(self: *Database) void {
         if (!self.in_tx or self.tx_map == null) return;
-        var tx_map = self.tx_map.?;
 
-        var it = tx_map.iterator();
+        var tx = self.tx_map.?;
+        var it = tx.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
             self.allocator.free(entry.value_ptr.*);
         }
-
-        tx_map.deinit();
+        tx.deinit();
         self.tx_map = null;
         self.in_tx = false;
+
         std.debug.print("Transaction rolled back.\n", .{});
     }
 
     fn setInMemory(self: *Database, key: []const u8, value: []const u8) !void {
-        // Remove existing entry if it exists to free old memory
-        if (self.map.fetchRemove(key)) |removed| {
+         if (self.map.fetchRemove(key)) |removed| {
             self.allocator.free(removed.key);
             self.allocator.free(removed.value);
         }
 
-        // Add new entry
-        const owned_key = try self.allocator.dupe(u8, key);
+         const owned_key = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(owned_key);
+
         const owned_value = try self.allocator.dupe(u8, value);
         errdefer self.allocator.free(owned_value);
         try self.map.put(owned_key, owned_value);
@@ -585,14 +578,28 @@ pub const Database = struct {
             },
         };
 
-        if (!self.in_tx) {
-            try log_entry.serialize(self.log_file);
-            try self.log_file.sync();
+        if (self.in_tx) {
+            var tx = self.tx_map orelse return error.NoTransaction;
+            if (tx.fetchRemove( key)) |removed| {
+                self.allocator.free(removed.key);
+                self.allocator.free(removed.value);
+            }
+            const owned_key = try self.allocator.dupe(u8, key);
+            errdefer self.allocator.free(owned_key);
+
+            const owned_value = try self.allocator.dupe(u8, value);
+            errdefer self.allocator.free(owned_value);
+
+            try tx.put(owned_key, owned_value);
+            return;
         }
 
         // Update in-memory map
+        try log_entry.serialize(self.log_file);
+        try self.log_file.sync();
+
         try self.setInMemory(key, value);
-        if (!self.in_tx) log_entry.printTable();
+        log_entry.printTable();
     }
 
     pub fn get(self: *Database, key: []const u8) ?[]const u8 {
@@ -600,21 +607,27 @@ pub const Database = struct {
     }
 
     pub fn del(self: *Database, key: []const u8) !bool {
-        // Write to log first
+        if (self.in_tx) {
+            if (self.tx_map) |*tx| {
+                _ = tx.fetchRemove(key);
+                const owned_key = try self.allocator.dupe(u8, key);
+                errdefer self.allocator.free(owned_key);
+                try tx.put(owned_key, try self.allocator.dupe(u8, ""));
+                return true;
+
+            }
+        }
+
         const log_entry = LogEntry{
             .Delete = .{
                 .key_len = @intCast(key.len),
                 .key = key,
             },
         };
+        try log_entry.serialize(self.log_file);
+        try self.log_file.sync();
+        log_entry.printTable();
 
-        if (!self.in_tx) {
-            try log_entry.serialize(self.log_file);
-            try self.log_file.sync();
-
-            log_entry.printTable();
-        }
-        // Update in-memory map
         return self.deleteInMemory(key);
     }
 };
