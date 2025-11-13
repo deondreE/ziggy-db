@@ -100,7 +100,7 @@ pub const Database = struct {
                             .Float => Value{ .Float = @bitCast(std.mem.readInt(u64, s_entry.raw_value[0..8], .little)) },
                             .Bool => Value{ .Bool = s_entry.raw_value[0] != 0 },
                             .Binary => Value{ .Binary = try allocator.dupe(u8, s_entry.raw_value) },
-                            .Timestamp => Value{.Timestamp =  std.mem.readInt(u64, s_entry.raw_value[0..8], .little) },
+                            .Timestamp => Value{ .Timestamp = std.mem.readInt(u64, s_entry.raw_value[0..8], .little) },
                         };
 
                         const key_copy = try allocator.dupe(u8, s_entry.key);
@@ -216,7 +216,7 @@ pub const Database = struct {
             .Timestamp => blk: {
                 std.mem.writeInt(u64, &raw_buf, v.Timestamp, .little);
                 break :blk raw_buf[0..8];
-            }
+            },
         };
 
         const val_type = switch (v) {
@@ -356,7 +356,7 @@ pub const Database = struct {
                 .Timestamp => blk: {
                     std.mem.writeInt(u64, &raw_buf, v.Timestamp, .little);
                     break :blk raw_buf[0..8];
-                }
+                },
             };
 
             const val_type = switch (v) {
@@ -479,7 +479,7 @@ pub const Database = struct {
     }
 
     pub fn setTimestamp(self: *Database, key: []const u8, v: u64) !void {
-        try self.setTyped(key, Value{ .Timestamp =  v}, null);
+        try self.setTyped(key, Value{ .Timestamp = v }, null);
     }
 
     pub fn del(self: *Database, key: []const u8) !bool {
@@ -505,7 +505,7 @@ pub const Database = struct {
             .Integer => Value{ .Integer = v.Integer },
             .Float => Value{ .Float = v.Float },
             .Bool => Value{ .Bool = v.Bool },
-            .Timestamp => Value { .Timestamp = v.Timestamp },
+            .Timestamp => Value{ .Timestamp = v.Timestamp },
         };
     }
 
@@ -529,7 +529,6 @@ pub const Database = struct {
     }
 };
 
-
 pub fn printValue(value: Value) void {
     const YELLOW = "\x1b[33m"; // Define colors here for printValue's specific usage
     const MAGENTA = "\x1b[35m";
@@ -538,12 +537,12 @@ pub fn printValue(value: Value) void {
     const RESET = "\x1b[0m";
 
     switch (value) {
-        .String => |s| std.debug.print("{s}{s}{s}", .{BLUE, s, RESET}),
-        .Integer => |i| std.debug.print("{s}{d}{s}", .{YELLOW, i, RESET}),
-        .Float => |f| std.debug.print("{s}{d:.2}{s}", .{YELLOW, f, RESET}),
-        .Bool => |b| std.debug.print("{s}{}{s}", .{MAGENTA, b, RESET}),
+        .String => |s| std.debug.print("{s}{s}{s}", .{ BLUE, s, RESET }),
+        .Integer => |i| std.debug.print("{s}{d}{s}", .{ YELLOW, i, RESET }),
+        .Float => |f| std.debug.print("{s}{d:.2}{s}", .{ YELLOW, f, RESET }),
+        .Bool => |b| std.debug.print("{s}{}{s}", .{ MAGENTA, b, RESET }),
         .Binary => |b| {
-            std.debug.print("{s}Binary[{d} bytes]: {s}", .{CYAN, b.len, RESET});
+            std.debug.print("{s}Binary[{d} bytes]: {s}", .{ CYAN, b.len, RESET });
             // Print a hex representation for binary data, more robust than just '.'
             // Or if you prefer printable characters and '.' for others
             // for (b) |byte| {
@@ -587,9 +586,7 @@ pub fn printValue(value: Value) void {
 
             const seconds = remaining_seconds;
 
-            const formatted_ts = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{
-                year, month_approx, day_approx, hours, minutes, seconds
-            }) catch "ERR_TS_FORMAT";
+            const formatted_ts = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{ year, month_approx, day_approx, hours, minutes, seconds }) catch "ERR_TS_FORMAT";
 
             std.debug.print("{s}{s}{s} {s}(Unix: {d}){s}", .{ MAGENTA, formatted_ts, RESET, BLUE, ts, RESET });
         },
