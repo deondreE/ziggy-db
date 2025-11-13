@@ -61,9 +61,9 @@
 
   - JSON/Structured Data: Add ValueType.JSON and store []const u8 (JSON string). Require parsing/validation.
 
-  - Bitmap
+  - [x] Bitmap
 
-  - Bitfeild
+  - [x] Bitfeild
 
   - Sets: Implement Unique Array Checks. Add SADD, SREM, SMEMBERS commands.
 
