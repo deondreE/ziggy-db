@@ -9,6 +9,9 @@ const Command = enum {
     lpush,
     lpop,
     lrange,
+    setbit,
+    getbit,
+    bitfeild,
     begin,
     commit,
     rollback,
@@ -25,6 +28,9 @@ fn parseCommand(tok: []const u8) Command {
     if (std.ascii.eqlIgnoreCase(tok, "LPOP")) return .lpop;
     if (std.ascii.eqlIgnoreCase(tok, "LRANGE")) return .lrange;
     if (std.ascii.eqlIgnoreCase(tok, "BEGIN")) return .begin;
+    if (std.ascii.eqlIgnoreCase(tok, "SETBIT")) return .setbit;
+    if (std.ascii.eqlIgnoreCase(tok, "GETBIT")) return .getbit;
+    if (std.ascii.eqlIgnoreCase(tok, "BITFEILD")) return .bitfeild;
     if (std.ascii.eqlIgnoreCase(tok, "COMMIT")) return .commit;
     if (std.ascii.eqlIgnoreCase(tok, "ROLLBACK")) return .rollback;
     if (std.ascii.eqlIgnoreCase(tok, "EXIT") or std.ascii.eqlIgnoreCase(tok, "QUIT"))
@@ -122,12 +128,16 @@ pub fn main() !void {
             .help => {
                 try stdout.print(
                     \\Commands:
-                    \\  SET key value [EXP seconds] [TYPE <STRING|INT|FLOAT|BOOL|BINARY|TIMESTAMP>]
+                    \\  SET key value [EXP seconds] [TYPE <STRING|INT|FLOAT|BOOL|BINARY|TIMESTAMP|BITMAP|BITFEILD>]
                     \\  GET key
                     \\  DEL key
                     \\  LPUSH key value [value ...]
                     \\  LPOP key
                     \\  LRANGE key start stop
+                    \\  SETBIT key offset value (0 or 1)
+                    \\  GETBIT key offset
+                    \\  BITFEILD key [SET <type> <offset_bytes> <value_str>] [GET <type> <offset_bytes>]
+                    \\      Types: u8, u16, u32, u64
                     \\  BEGIN / COMMIT / ROLLBACK
                     \\  HELP / EXIT
                     \\-------------------------------------------
@@ -167,7 +177,7 @@ pub fn main() !void {
                         i += 1;
                     } else if (std.ascii.eqlIgnoreCase(arg, "TYPE")) {
                         if (i + 1 >= args_temp_alloc.items.len) {
-                            try stdout.print("Missing type for TYPE option (STRING, INT, FLOAT, BOOL, BINARY, TIMESTAMP)\n", .{});
+                            try stdout.print("Missing type for TYPE option (STRING, INT, FLOAT, BOOL, BINARY, TIMESTAMP, BITMAP, BITFEILD)\n", .{});
                             continue :shell_loop;
                         }
                         const type_str = args_temp_alloc.items[i + 1];
@@ -183,6 +193,10 @@ pub fn main() !void {
                             value_type = dbmod.ValueType.Binary;
                         } else if (std.ascii.eqlIgnoreCase(type_str, "TIMESTAMP")) {
                             value_type = dbmod.ValueType.Timestamp;
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "BITMAP")) {
+                            value_type = dbmod.ValueType.Bitmap;
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "BITFEILD")) {
+                            value_type = dbmod.ValueType.BitFeild;
                         } else {
                             try stdout.print("Unknown type: {s} (expected STRING, INT, FLOAT, BOOL, BINARY, TIMESTAMP)\n", .{type_str});
                             continue :shell_loop;
@@ -207,6 +221,8 @@ pub fn main() !void {
                         .Bool => if (std.ascii.eqlIgnoreCase(val_str.?, "true")) dbmod.Value{ .Bool = true } else dbmod.Value{ .Bool = false },
                         .Binary => dbmod.Value{ .Binary = val_str.? },
                         .Timestamp => dbmod.Value{ .Timestamp = try std.fmt.parseInt(u64, val_str.?, 10) },
+                        .Bitmap => dbmod.Value{ .Bitmap = val_str.? },
+                        .BitFeild => dbmod.Value{ .Bitmap = val_str.? },
                     };
 
                     var final_expiry_unix_s: ?u64 = null;
@@ -276,6 +292,172 @@ pub fn main() !void {
                     for (vals, 0..) |v, i| {
                         try stdout.print("{d}) {s}\n", .{ i + 1, v });
                     }
+                }
+            },
+            .setbit => {
+                const key = toks.next() orelse {
+                    try stdout.print("Missing key\n", .{});
+                    continue :shell_loop;
+                };
+                const offset_str = toks.next() orelse {
+                    try stdout.print("SETBIT Missing offset\n", .{});
+                    continue :shell_loop;
+                };
+                const value_str = toks.next() orelse {
+                    try stdout.print("SETBIT Missing value (0 or 1)\n", .{});
+                    continue :shell_loop;
+                };
+
+                const offset = std.fmt.parseInt(u32, offset_str, 10) catch {
+                    try stdout.print("SETBIT Invalid offset (must be u32 integer)\n", .{});
+                    continue :shell_loop;
+                };
+
+                const value = if (std.ascii.eqlIgnoreCase(value_str, "1")) true else if (std.ascii.eqlIgnoreCase(value_str, "0")) false else {
+                    try stdout.print("SETBIT Invalid value (must be 0 or 1)\n", .{});
+                    continue :shell_loop;
+                };
+
+                try db.setBit(key, offset, value); 
+            },
+            .getbit => {
+                const key = toks.next() orelse {
+                    try stdout.print("GETBIT Missing key\n", .{});
+                    continue :shell_loop;
+                };
+                const offset_str = toks.next() orelse {
+                    try stdout.print("GETBIT Missing offset\n", .{});
+                    continue :shell_loop;
+                };
+                const offset = std.fmt.parseInt(u32, offset_str, 10) catch {
+                    try stdout.print("SETBIT Invalid offset (must be u32 integer)\n", .{});
+                    continue :shell_loop;
+                };
+
+                if (try db.getBit(key, offset)) |bit_val| {
+                    try stdout.print("{d}\n", .{if (bit_val) @as(u8, 0) else @as(u8, 1)});
+                } else {
+                    try stdout.print("(nil)\n", .{});
+                }
+            },
+            .bitfeild => {
+                const key = toks.next() orelse {
+                    try stdout.print("BITFIELD Missing key\n", .{});
+                    continue :shell_loop;
+                };
+
+                const subcommand_tok = toks.next() orelse {
+                    try stdout.print("BITFIELD Missing subcommand (SET or GET)\n", .{});
+                    continue :shell_loop;
+                };
+
+                if (std.ascii.eqlIgnoreCase(subcommand_tok, "SET")) {
+                    const type_str = toks.next() orelse {
+                        try stdout.print("BITFIELD SET Missing type (u8, u16, u32, u64)\n", .{});
+                        continue :shell_loop;
+                    };
+                    const offset_str = toks.next() orelse {
+                        try stdout.print("BITFIELD SET Missing offset_bytes\n", .{});
+                        continue :shell_loop;
+                    };
+                    const value_str = toks.next() orelse {
+                        try stdout.print("BITFIELD SET Missing value\n", .{});
+                        continue :shell_loop;
+                    };
+
+                    const offset_bytes = std.fmt.parseInt(u32, offset_str, 10) catch {
+                        try stdout.print("BITFIELD SET Invalid offset_bytes (must be u32 integer)\n", .{});
+                        continue :shell_loop;
+                    };
+
+                    var value_bytes_arr: [8]u8 = undefined;
+                    var value_len_bytes: u32 = 0;
+
+                    if (std.ascii.eqlIgnoreCase(type_str, "u8")) {
+                        const val = std.fmt.parseInt(u8, value_str, 10) catch {
+                            try stdout.print("BITFIELD SET Invalid u8 value\n", .{});
+                            continue :shell_loop;
+                        };
+                        std.mem.writeInt(u8, value_bytes_arr[0..1], val, .little);
+                        value_len_bytes = 1;
+                    } else if (std.ascii.eqlIgnoreCase(type_str, "u16")) {
+                        const val = std.fmt.parseInt(u16, value_str, 10) catch {
+                            try stdout.print("BITFIELD SET Invalid u16 value\n", .{});
+                            continue :shell_loop;
+                        };
+                        std.mem.writeInt(u16, value_bytes_arr[0..2], val, .little);
+                        value_len_bytes = 2;
+                    } else if (std.ascii.eqlIgnoreCase(type_str, "u32")) {
+                        const val = std.fmt.parseInt(u32, value_str, 10) catch {
+                            try stdout.print("BITFIELD SET Invalid u32 value\n", .{});
+                            continue :shell_loop;
+                        };
+                        std.mem.writeInt(u32, value_bytes_arr[0..4], val, .little);
+                        value_len_bytes = 4;
+                    } else if (std.ascii.eqlIgnoreCase(type_str, "u64")) {
+                        const val = std.fmt.parseInt(u64, value_str, 10) catch {
+                            try stdout.print("BITFIELD SET Invalid u64 value\n", .{});
+                            continue :shell_loop;
+                        };
+                        std.mem.writeInt(u64, value_bytes_arr[0..8], val, .little);
+                        value_len_bytes = 8;
+                    } else {
+                        try stdout.print("BITFIELD SET Unknown type: {s} (expected u8, u16, u32, u64)\n", .{type_str});
+                        continue :shell_loop;
+                    }
+
+                    try db.bitfieldSet(key, offset_bytes, value_len_bytes, value_bytes_arr[0..value_len_bytes]);
+                    try stdout.print("OK\n", .{});
+                } else if (std.ascii.eqlIgnoreCase(subcommand_tok, "GET")) {
+                    const type_str = toks.next() orelse {
+                        try stdout.print("BITFIELD GET Missing type (u8, u16, u32, u64)\n", .{});
+                        continue :shell_loop;
+                    };
+                    const offset_str = toks.next() orelse {
+                        try stdout.print("BITFIELD GET Missing offset_bytes\n", .{});
+                        continue :shell_loop;
+                    };
+
+                    const offset_bytes = std.fmt.parseInt(u32, offset_str, 10) catch {
+                        try stdout.print("BITFIELD GET Invalid offset_bytes (must be u32 integer)\n", .{});
+                        continue :shell_loop;
+                    };
+
+                    var value_len_bytes: u32 = 0;
+                    if (std.ascii.eqlIgnoreCase(type_str, "u8")) {
+                        value_len_bytes = 1;
+                    } else if (std.ascii.eqlIgnoreCase(type_str, "u16")) {
+                        value_len_bytes = 2;
+                    } else if (std.ascii.eqlIgnoreCase(type_str, "u32")) {
+                        value_len_bytes = 4;
+                    } else if (std.ascii.eqlIgnoreCase(type_str, "u64")) {
+                        value_len_bytes = 8;
+                    } else {
+                        try stdout.print("BITFIELD GET Unknown type: {s} (expected u8, u16, u32, u64)\n", .{type_str});
+                        continue :shell_loop;
+                    }
+
+                    if (try db.bitfieldGet(key, offset_bytes, value_len_bytes, alloc)) |retrieved_bytes| {
+                        defer alloc.free(retrieved_bytes);
+
+                        if (std.ascii.eqlIgnoreCase(type_str, "u8")) {
+                            const val = std.mem.readInt(u8, &retrieved_bytes[0..1].*, .little);
+                            try stdout.print("{d}\n", .{val});
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "u16")) {
+                            const val = std.mem.readInt(u16, &retrieved_bytes[0..2].*, .little);
+                            try stdout.print("{d}\n", .{val});
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "u32")) {
+                            const val = std.mem.readInt(u32, &retrieved_bytes[0..4].*, .little);
+                            try stdout.print("{d}\n", .{val});
+                        } else if (std.ascii.eqlIgnoreCase(type_str, "u64")) {
+                            const val = std.mem.readInt(u64, &retrieved_bytes[0..8].*, .little);
+                            try stdout.print("{d}\n", .{val});
+                        }
+                    } else {
+                        try stdout.print("(nil)\n", .{});
+                    }
+                } else {
+                    try stdout.print("BITFIELD Unknown subcommand: {s} (expected SET or GET)\n", .{subcommand_tok});
                 }
             },
             .begin => {

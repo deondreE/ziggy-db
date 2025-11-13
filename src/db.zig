@@ -101,6 +101,8 @@ pub const Database = struct {
                             .Bool => Value{ .Bool = s_entry.raw_value[0] != 0 },
                             .Binary => Value{ .Binary = try allocator.dupe(u8, s_entry.raw_value) },
                             .Timestamp => Value{ .Timestamp = std.mem.readInt(u64, s_entry.raw_value[0..8], .little) },
+                            .Bitmap => Value{ .Bitmap = try allocator.dupe(u8, s_entry.raw_value) },
+                            .BitFeild => Value{ .BitFeild = try allocator.dupe(u8, s_entry.raw_value) },
                         };
 
                         const key_copy = try allocator.dupe(u8, s_entry.key);
@@ -148,6 +150,104 @@ pub const Database = struct {
                             }
                         }
                         db.allocator.free(lp_entry.key);
+                    },
+                    .BitmapSetBit => |bsb_entry| {
+                        var current_value_meta: ?ValueWithMetadata = null;
+                        if (db.map.get(bsb_entry.key)) |v_meta| {
+                            current_value_meta = try dupValueWithMetadata(db.allocator, v_meta);
+                            _ = db.map.fetchRemove(bsb_entry.key);
+                        }
+
+                        var bitmap_bytes: []u8 = undefined;
+                        var existing_bytes: ?u64 = null;
+
+                        if (current_value_meta) |v_meta| {
+                            existing_bytes = v_meta.expiry_unix_s;
+                            if (v_meta.value == .Bitmap) {
+                                bitmap_bytes = try db.allocator.alloc(u8, v_meta.value.Bitmap.len);
+                            } else {
+                                // Type mismatch during replay, discard value and create an empty one.
+                                freeValueWithMetadata(db.allocator, v_meta);
+                                const byte_len = (bsb_entry.offset / 8) + 1;
+                                bitmap_bytes = try db.allocator.alloc(u8, byte_len);
+                                @memset(bitmap_bytes, 0);
+                            }
+                            freeValueWithMetadata(db.allocator, v_meta);
+                        } else {
+                            const byte_len = (bsb_entry.offset / 8) + 1;
+                            bitmap_bytes = try db.allocator.alloc(u8, byte_len);
+                            @memset(bitmap_bytes, 0);
+                        }
+                        errdefer db.allocator.free(bitmap_bytes);
+
+                        const byte_index = bsb_entry.offset / 8;
+                        if (byte_index >= bitmap_bytes.len) {
+                            const old_len = bitmap_bytes.len;
+                            const new_len = byte_index + 1;
+                            bitmap_bytes = try db.allocator.realloc(bitmap_bytes, new_len);
+                            @memset(bitmap_bytes[old_len..new_len], 0);
+                        }
+
+                        const bit_in_byte_index: u3 = @intCast(bsb_entry.offset % 8);
+                        const mask = @as(u8, 1) << bit_in_byte_index;
+
+                        if (bsb_entry.value) {
+                            bitmap_bytes[byte_index] |= mask;
+                        } else {
+                            bitmap_bytes[byte_index] &= ~mask;
+                        }
+
+                        const key_copy = try db.allocator.dupe(u8, bsb_entry.key);
+                        const new_v = Value{ .Bitmap = bitmap_bytes };
+                        const new_v_meta = ValueWithMetadata{ .value = new_v, .expiry_unix_s = existing_bytes };
+                        try db.map.put(key_copy, new_v_meta);
+
+                        db.allocator.free(bsb_entry.key);
+                    },
+                    .BitFeildSet => |bfs_entry| {
+                        var current_value_meta: ?ValueWithMetadata = null;
+                        if (db.map.get(bfs_entry.key)) |v_meta| {
+                            current_value_meta = try dupValueWithMetadata(db.allocator, v_meta);
+                            _ = db.map.fetchRemove(bfs_entry.key);
+                        }
+
+                        var bitfeild_bytes: []u8 = undefined;
+                        var existing_expiry: ?u64 = null;
+
+                        if (current_value_meta) |v_meta| {
+                            existing_expiry = v_meta.expiry_unix_s;
+                            if (v_meta.value == .BitFeild) {
+                                bitfeild_bytes = try db.allocator.dupe(u8, v_meta.value.BitFeild);
+                            } else {
+                                freeValueWithMetadata(db.allocator, v_meta);
+                                const intitial_len = bfs_entry.offset_bytes + bfs_entry.value_len_bytes;
+                                bitfeild_bytes = try db.allocator.alloc(u8, intitial_len);
+                                @memset(bitfeild_bytes, 0);
+                            }
+                            freeValueWithMetadata(db.allocator, v_meta);
+                        } else {
+                            const initial_len = bfs_entry.offset_bytes + bfs_entry.value_len_bytes;
+                            bitfeild_bytes = try db.allocator.alloc(u8, initial_len);
+                            @memset(bitfeild_bytes, 0);
+                        }
+                        errdefer db.allocator.free(bitfeild_bytes);
+
+                        const required_len = bfs_entry.offset_bytes + bfs_entry.value_len_bytes;
+                        if (required_len > bitfeild_bytes.len) {
+                            const old_len = bitfeild_bytes.len;
+                            bitfeild_bytes = try db.allocator.realloc(bitfeild_bytes, required_len);
+                            @memset(bitfeild_bytes[old_len..required_len], 0);
+                        }
+
+                        @memcpy(bitfeild_bytes[bfs_entry.offset_bytes .. bfs_entry.offset_bytes + bfs_entry.value_len_bytes], bfs_entry.value_bytes);
+
+                        const key_copy = try db.allocator.dupe(u8, bfs_entry.key);
+                        const new_v = Value{ .BitFeild = bitfeild_bytes };
+                        const new_v_meta = ValueWithMetadata{ .value = new_v, .expiry_unix_s = existing_expiry };
+                        try db.map.put(key_copy, new_v_meta);
+
+                        db.allocator.free(bfs_entry.key);
+                        db.allocator.free(bfs_entry.value_bytes);
                     },
                 }
             } else if (file_size > 0) {
@@ -199,6 +299,8 @@ pub const Database = struct {
         var raw_buf: [8]u8 = undefined;
         const tmp: []const u8 = switch (v) {
             .String => v.String,
+            .Bitmap => v.Bitmap,
+            .BitFeild => v.BitFeild,
             .Binary => v.Binary,
             .Integer => blk: {
                 std.mem.writeInt(i64, &raw_buf, v.Integer, .little);
@@ -226,6 +328,8 @@ pub const Database = struct {
             .Bool => ValueType.Bool,
             .Binary => ValueType.Binary,
             .Timestamp => ValueType.Timestamp,
+            .Bitmap => ValueType.Bitmap,
+            .BitFeild => ValueType.BitFeild,
         };
 
         var final_time: ?u64 = null;
@@ -340,6 +444,8 @@ pub const Database = struct {
             const tmp: []const u8 = switch (v) {
                 .String => v.String,
                 .Binary => v.Binary,
+                .Bitmap => v.Bitmap,
+                .BitFeild => v.BitFeild,
                 .Integer => blk: {
                     std.mem.writeInt(i64, &raw_buf, v.Integer, .little);
                     break :blk raw_buf[0..8];
@@ -366,6 +472,8 @@ pub const Database = struct {
                 .Bool => ValueType.Bool,
                 .Binary => ValueType.Binary,
                 .Timestamp => ValueType.Timestamp,
+                .Bitmap => ValueType.Bitmap,
+                .BitFeild => ValueType.BitFeild,
             };
 
             const log_entry = LogEntry{
@@ -482,6 +590,14 @@ pub const Database = struct {
         try self.setTyped(key, Value{ .Timestamp = v }, null);
     }
 
+    pub fn setBitmap(self: *Database, key: []const u8, v: []const u8) !void {
+        try self.setTyped(key, Value{ .Bitmap = v }, null);
+    }
+
+    pub fn setBitFeild(self: *Database, key: []const u8, v: []const u8) !void {
+        try self.setTyped(key, Value{ .BitFeild = v }, null);
+    }
+
     pub fn del(self: *Database, key: []const u8) !bool {
         if (!self.in_tx) {
             const log_entry = LogEntry{
@@ -502,6 +618,8 @@ pub const Database = struct {
         return switch (v) {
             .String => |s| Value{ .String = try a.dupe(u8, s) },
             .Binary => |b| Value{ .Binary = try a.dupe(u8, b) },
+            .Bitmap => |bm| Value{ .Bitmap = try a.dupe(u8, bm) },
+            .BitFeild => |bf| Value{ .BitFeild = try a.dupe(u8, bf) },
             .Integer => Value{ .Integer = v.Integer },
             .Float => Value{ .Float = v.Float },
             .Bool => Value{ .Bool = v.Bool },
@@ -513,6 +631,8 @@ pub const Database = struct {
         switch (v) {
             .String => |s| a.free(s),
             .Binary => |b| a.free(b),
+            .Bitmap => |bm| a.free(bm),
+            .BitFeild => |bf| a.free(bf),
             else => {},
         }
     }
@@ -526,6 +646,211 @@ pub const Database = struct {
 
     pub fn freeValueWithMetadata(a: std.mem.Allocator, vwm: ValueWithMetadata) void {
         freeValue(a, vwm.value);
+    }
+
+    pub fn setBit(self: *Database, key: []const u8, bit_offset: u32, value: bool) !void {
+        var current_value_meta: ?ValueWithMetadata = null;
+        if (self.map.get(key)) |v_meta| {
+            current_value_meta = try dupValueWithMetadata(self.allocator, v_meta);
+            _ = self.map.fetchRemove(key);
+        }
+
+        var bitmap_bytes: []u8 = undefined;
+        var existing_expiry: ?u64 = null;
+
+        if (current_value_meta) |v_meta| {
+            existing_expiry = v_meta.expiry_unix_s;
+            if (v_meta.value == .Bitmap) {
+                bitmap_bytes = try self.allocator.dupe(u8, v_meta.value.Bitmap);
+            } else {
+                freeValueWithMetadata(self.allocator, v_meta);
+                const byte_len = (bit_offset / 8) + 1;
+                bitmap_bytes = try self.allocator.alloc(u8, byte_len);
+                @memset(bitmap_bytes, 0);
+            } 
+        } else {
+            const byte_len = (bit_offset / 8) + 1;
+            bitmap_bytes = try self.allocator.alloc(u8, byte_len);
+            @memset(bitmap_bytes, 0);
+        }
+        // errdefer self.allocator.free(bitmap_bytes);
+
+        const byte_index = bit_offset / 8;
+        if (byte_index >= bitmap_bytes.len) {
+            const old_len = bitmap_bytes.len;
+            const new_len = byte_index + 1;
+            bitmap_bytes = try self.allocator.realloc(bitmap_bytes, new_len);
+            @memset(bitmap_bytes[old_len..new_len], 0);
+        }
+
+        const bit_in_byte_offset: u3 = @intCast(bit_offset % 8);
+        const mask = @as(u8, 1) << bit_in_byte_offset;
+
+        if (value) {
+            bitmap_bytes[byte_index] |= mask;
+        } else {
+            bitmap_bytes[byte_index] &= ~mask;
+        }
+
+        if (!self.replaying and !self.in_tx) {
+            const log_entry = LogEntry{
+                .BitmapSetBit = .{
+                    .key_len = @intCast(key.len),
+                    .key = key,
+                    .offset = bit_offset,
+                    .value = value,
+                },
+            };
+            try log_entry.serialize(self.log_file);
+            try self.log_file.sync();
+            log_entry.printTable();
+        }
+
+        const key_copy = try self.allocator.dupe(u8, key);
+        const new_v = Value{ .Bitmap = bitmap_bytes }; // bitmap_bytes is now owned by new_v
+        const new_v_meta = ValueWithMetadata{ .value = new_v, .expiry_unix_s = existing_expiry };
+        try self.map.put(key_copy, new_v_meta);
+    }
+
+    pub fn getBit(self: *Database, key: []const u8, bit_offset: u32) !?bool {
+        if (self.map.get(key)) |v_meta| {
+            if (v_meta.expiry_unix_s) |expiry| {
+                const current_time_s: u64 = @intCast(std.time.timestamp());
+                if (current_time_s >= expiry) {
+                    if (!self.in_tx and !self.replaying) {
+                        _ = self.del(key) catch {};
+                    } else if (self.in_tx) {
+                        _ = self.deleteInMemory(key);
+                    }
+                    return null;
+                }
+            }
+            if (v_meta.value == .Bitmap) {
+                const bitmap_bytes = v_meta.value.Bitmap;
+                const byte_index = bit_offset / 8;
+                if (byte_index >= bitmap_bytes.len) {
+                    return false;
+                }
+                const bit_in_byte_index: u3 = @intCast(bit_offset % 8);
+                const mask = @as(u8, 1) << bit_in_byte_index;
+                return (bitmap_bytes[byte_index] & mask) != 0;
+            } else {
+                return error.TypeMismatch;
+            }
+        }
+        return null;
+    }
+
+    pub fn bitfieldSet(
+        self: *Database,
+        key: []const u8,
+        byte_offset: u32,
+        value_len_bytes: u32,
+        value_bytes: []const u8, // Bytes to set (e.g., 1 byte for u8, 2 for u16)
+    ) !void {
+        if (value_bytes.len != value_len_bytes) return error.InvalidParameter;
+
+        // fetch current value
+        var current_value_meta: ?ValueWithMetadata = null;
+        if (self.map.get(key)) |v_meta| {
+            current_value_meta = try dupValueWithMetadata(self.allocator, v_meta);
+            _ = self.map.fetchRemove(key);
+        }
+
+        var bitfeild_bytes: []u8 = undefined;
+        var existing_expiry: ?u64 = null;
+
+        if (current_value_meta) |v_meta| {
+            existing_expiry = v_meta.expiry_unix_s;
+            if (v_meta.value == .BitFeild) {
+                bitfeild_bytes = try self.allocator.dupe(u8, v_meta.value.BitFeild);
+            } else {
+                freeValueWithMetadata(self.allocator, v_meta);
+                const initial_len = byte_offset + value_len_bytes;
+                bitfeild_bytes = try self.allocator.alloc(u8, initial_len);
+                @memset(bitfeild_bytes, 0);
+            }
+            freeValueWithMetadata(self.allocator, v_meta);
+        } else {
+            const initial_len = byte_offset + value_len_bytes;
+            bitfeild_bytes = try self.allocator.alloc(u8, initial_len);
+            @memset(bitfeild_bytes, 0);
+        }
+        errdefer self.allocator.free(bitfeild_bytes);
+
+        // Ensure bitfeild_bytes is large enough
+        const required_length = byte_offset + value_len_bytes;
+        if (required_length > bitfeild_bytes.len) {
+            const old_len = bitfeild_bytes.len;
+            bitfeild_bytes = try self.allocator.alloc(u8, required_length);
+            @memset(bitfeild_bytes[old_len..required_length], 0);
+        }
+
+        @memcpy(bitfeild_bytes[byte_offset .. byte_offset + value_len_bytes], value_bytes);
+
+        if (!self.in_tx and !self.replaying) {
+            const value_bytes_copy = try self.allocator.dupe(u8, value_bytes);
+            const log_entry = LogEntry{
+                .BitFeildSet = .{
+                    .key_len = @intCast(key.len),
+                    .key = key,
+                    .offset_bytes = byte_offset,
+                    .value_len_bytes = value_len_bytes,
+                    .value_bytes = value_bytes_copy,
+                },
+            };
+            try log_entry.serialize(self.log_file);
+            try self.log_file.sync();
+            log_entry.printTable();
+            self.allocator.free(value_bytes_copy);
+        }
+
+        const key_copy = try self.allocator.dupe(u8, key);
+        const new_v = Value{ .BitFeild = bitfeild_bytes };
+        const new_v_meta = ValueWithMetadata{ .value = new_v, .expiry_unix_s = existing_expiry };
+        try self.map.put(key_copy, new_v_meta);
+    }
+
+    pub fn bitfieldGet(
+        self: *Database,
+        key: []const u8,
+        byte_offset: u32,
+        value_len_bytes: u32,
+        allocator: std.mem.Allocator,
+    ) !?[]const u8 {
+        if (self.map.get(key)) |v_meta| {
+            if (v_meta.expiry_unix_s) |expiry| {
+                const current_time_s: u64 = @intCast(std.time.timestamp());
+                if (current_time_s >= expiry) {
+                    if (!self.in_tx and !self.replaying) {
+                        _ = self.del(key) catch {};
+                    } else if (self.in_tx) {
+                        _ = self.deleteInMemory(key);
+                    }
+                    return null;
+                }
+            }
+            if (v_meta.value == .BitFeild) {
+                const bitfield_bytes = v_meta.value.BitFeild;
+                if (byte_offset + value_len_bytes > bitfield_bytes.len) {
+                    const result = try allocator.alloc(u8, value_len_bytes);
+                    @memset(result, 0);
+                    // only copy if offset is witin bounds
+                    if (byte_offset < bitfield_bytes.len) {
+                        const bytes_to_copy = @min(value_len_bytes, bitfield_bytes.len - byte_offset);
+                        if (byte_offset < bitfield_bytes.len) {
+                            @memcpy(result[0..bytes_to_copy], bitfield_bytes[byte_offset .. byte_offset + bytes_to_copy]);
+                        }
+                        
+                        return result;
+                    }
+                }
+                return try (allocator.dupe(u8, bitfield_bytes[byte_offset .. byte_offset + value_len_bytes]));
+            } else {
+                return error.TypeMismatch;
+            }
+        }
+        return null;
     }
 };
 
@@ -589,6 +914,28 @@ pub fn printValue(value: Value) void {
             const formatted_ts = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{ year, month_approx, day_approx, hours, minutes, seconds }) catch "ERR_TS_FORMAT";
 
             std.debug.print("{s}{s}{s} {s}(Unix: {d}){s}", .{ MAGENTA, formatted_ts, RESET, BLUE, ts, RESET });
+        },
+        .Bitmap => |bm| {
+            std.debug.print("{s}Bitmap[{d} bytes]: {s}", .{ CYAN, bm.len, RESET });
+
+            for (bm) |byte| {
+                for (0..8) |i| {
+                    const shift_val: u3 = @intCast((7 - i));
+                    if (((byte >> shift_val) & 1) != 0) {
+                        std.debug.print("1", .{});
+                    } else {
+                        std.debug.print("0", .{});
+                    }
+                }
+                std.debug.print(" ", .{});
+            }
+        },
+        .BitFeild => |bf| {
+            std.debug.print("{s}BitFeild[{d} bytes]: {s}", .{ CYAN, bf.len, RESET });
+
+            for (bf) |byte| {
+                std.debug.print("\\x{x:0>2}", .{byte});
+            }
         },
     }
 }

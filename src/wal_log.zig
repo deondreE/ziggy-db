@@ -5,6 +5,8 @@ const OperationType = enum(u8) {
     Delete,
     ListPush,
     ListPop,
+    BitmapSetBit,
+    BitFeildSet,
 };
 
 pub const ValueType = enum(u8) {
@@ -14,6 +16,8 @@ pub const ValueType = enum(u8) {
     Bool,
     Binary,
     Timestamp,
+    Bitmap,
+    BitFeild,
 };
 
 pub const Value = union(ValueType) {
@@ -23,6 +27,8 @@ pub const Value = union(ValueType) {
     Bool: bool,
     Binary: []const u8,
     Timestamp: u64,
+    Bitmap: []const u8,
+    BitFeild: []const u8,
 };
 
 pub const LogEntry = union(OperationType) {
@@ -47,6 +53,19 @@ pub const LogEntry = union(OperationType) {
     ListPop: struct {
         key_len: u32,
         key: []const u8,
+    },
+    BitmapSetBit: struct {
+        key_len: u32,
+        key: []const u8,
+        offset: u32,
+        value: bool,
+    },
+    BitFeildSet: struct {
+        key_len: u32,
+        key: []const u8,
+        offset_bytes: u32,
+        value_len_bytes: u32,
+        value_bytes: []const u8,
     },
 
     pub fn serialize(self: LogEntry, file: std.fs.File) !void {
@@ -99,6 +118,29 @@ pub const LogEntry = union(OperationType) {
                 try file.writeAll(&buf4);
                 try file.writeAll(lp.key);
             },
+            .BitmapSetBit => |bsb_entry| {
+                var buf1: [1]u8 = undefined;
+                std.mem.writeInt(u32, &buf4, bsb_entry.key_len, .little);
+                try file.writeAll(&buf4);
+                try file.writeAll(bsb_entry.key);
+
+                std.mem.writeInt(u32, &buf4, bsb_entry.offset, .little);
+                try file.writeAll(&buf4);
+
+                buf1[0] = if (bsb_entry.value) 1 else 0;
+                try file.writeAll(&buf1);
+            },
+            .BitFeildSet => |bsf_entry| {
+                std.mem.writeInt(u32, &buf4, bsf_entry.key_len, .little);
+                try file.writeAll(&buf4);
+                try file.writeAll(bsf_entry.key);
+
+                std.mem.writeInt(u32, &buf4, bsf_entry.offset_bytes, .little);
+                try file.writeAll(&buf4);
+                std.mem.writeInt(u32, &buf4, bsf_entry.value_len_bytes, .little);
+                try file.writeAll(&buf4);
+                try file.writeAll(bsf_entry.value_bytes);
+            },
         }
     }
 
@@ -109,6 +151,7 @@ pub const LogEntry = union(OperationType) {
         const op = @as(OperationType, @enumFromInt(tag[0]));
 
         var buf4: [4]u8 = undefined;
+        var buf1: [1]u8 = undefined;
 
         switch (op) {
             .Set => {
@@ -197,6 +240,54 @@ pub const LogEntry = union(OperationType) {
                     },
                 };
             },
+            .BitmapSetBit => {
+                _ = try file.readAll(&buf4);
+                const key_len = std.mem.readInt(u32, &buf4, .little);
+                const key = try allocator.alloc(u8, key_len);
+                errdefer allocator.free(key);
+                if (try file.readAll(key) < key_len) return error.EndOfStream;
+
+                _ = try file.readAll(&buf4);
+                const offset = std.mem.readInt(u32, &buf4, .little);
+
+                _ = try file.readAll(&buf1);
+                const value = buf1[0] != 0;
+
+                return LogEntry{
+                    .BitmapSetBit = .{
+                        .key_len = key_len,
+                        .key = key,
+                        .offset = offset,
+                        .value = value,
+                    },
+                };
+            },
+            .BitFeildSet => {
+                _ = try file.readAll(&buf4);
+                const key_len = std.mem.readInt(u32, &buf4, .little);
+                const key = try allocator.alloc(u8, key_len);
+                errdefer allocator.free(key);
+                if (try file.readAll(key) < key_len) return error.EndOfStream;
+
+                _ = try file.readAll(&buf4);
+                const offset_bytes = std.mem.readInt(u32, &buf4, .little);
+                _ = try file.readAll(&buf4);
+                const value_len_bytes = std.mem.readInt(u32, &buf4, .little);
+
+                const value_bytes = try allocator.alloc(u8, value_len_bytes);
+                errdefer allocator.free(value_bytes);
+                if (try file.readAll(value_bytes) < value_len_bytes) return error.EndOfStream;
+
+                return LogEntry{
+                    .BitFeildSet = .{
+                        .key_len = key_len,
+                        .key = key,
+                        .offset_bytes = offset_bytes,
+                        .value_len_bytes = value_len_bytes,
+                        .value_bytes = value_bytes,
+                    },
+                };
+            },
         }
     }
 
@@ -231,12 +322,11 @@ pub const LogEntry = union(OperationType) {
         });
         std.debug.print("{s}├───────────┼───────────────┼───────────────────────┤{s}\n", .{ DIM, RESET });
 
+        var actual_content_len: usize = 0;
+        const value_column_width: usize = 21;
         switch (self) {
             .Set => |s_entry| {
                 std.debug.print("{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} ", .{ DIM, RESET, GREEN, "Set", RESET, DIM, RESET, CYAN, s_entry.key, RESET, DIM, RESET });
-
-                var actual_content_len: usize = 0;
-                const value_column_width: usize = 21;
 
                 switch (s_entry.val_type) {
                     .String => {
@@ -277,6 +367,44 @@ pub const LogEntry = union(OperationType) {
                         }
                         std.debug.print("{s}", .{RESET});
                         actual_content_len = count_visible;
+                    },
+                    .Bitmap => {
+                        std.debug.print("{s}Bitmap[{d} bytes]: ", .{ CYAN, s_entry.raw_value.len });
+                        var current_len: usize = "Bitmap[] bytes: ".len;
+                        for (s_entry.raw_value) |byte| {
+                            if (current_len + 9 > value_column_width) { // 8 bytes + 1 space
+                                std.debug.print("...", .{}); // too long truncate.
+                                current_len += 3;
+                                break;
+                            }
+
+                            for (0..8) |i| {
+                                const shift_val: u3 = @intCast(7 - i);
+                                if (((byte >> shift_val) & 1) != 0) {
+                                    std.debug.print("1", .{});
+                                } else {
+                                    std.debug.print("0", .{});
+                                }
+                            }
+                            std.debug.print(" ", .{});
+                            current_len += 9;
+                        }
+                        std.debug.print("{s}", .{RESET});
+                        actual_content_len += current_len;
+                    },
+                    .BitFeild => {
+                        std.debug.print("{s}BitFeild[{d} bytes]: ", .{ CYAN, s_entry.raw_value.len });
+                        var current_len: usize = "Bitfield[] bytes: ".len;
+                        for (s_entry.raw_value) |byte| {
+                            if (current_len + 4 > value_column_width) {
+                                std.debug.print("...", .{});
+                                current_len += 3;
+                                break;
+                            }
+                            std.debug.print("\\x{x:0>2}", .{byte});
+                            current_len += 4;
+                        }
+                        actual_content_len = current_len;
                     },
                     .Timestamp => {
                         const ts_val = std.mem.readInt(u64, s_entry.raw_value[0..8], .little);
@@ -344,6 +472,36 @@ pub const LogEntry = union(OperationType) {
             },
             .ListPop => |lp| {
                 std.debug.print("{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} {s}{s:21}{s} {s}│{s}\n", .{ DIM, RESET, RED, "ListPop", RESET, DIM, RESET, CYAN, lp.key, RESET, DIM, RESET, DIM, "-", RESET, DIM, RESET });
+            },
+            .BitmapSetBit => |bsb_entry| {
+                var value_str: [8]u8 = undefined;
+                const len = std.fmt.bufPrint(&value_str, "Bit {d}={d}", .{ bsb_entry.offset, if (bsb_entry.value) @as(u8, 1) else @as(u8, 0) }) catch "ERR";
+                std.debug.print("{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} {s}{s:21}{s} {s}│{s}\n", .{ DIM, RESET, GREEN, "SetBit", RESET, DIM, RESET, CYAN, bsb_entry.key, RESET, DIM, RESET, YELLOW, len, RESET, DIM, RESET });
+            },
+            .BitFeildSet => |bfs_entry| {
+                std.debug.print("{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} ", .{ DIM, RESET, GREEN, "Bitfield", RESET, DIM, RESET, CYAN, bfs_entry.key, RESET, DIM, RESET });
+                var value_repr_buf: [64]u8 = undefined;
+                var current_len: usize = 0;
+                const formatted = std.fmt.bufPrint(&value_repr_buf, "Off {d}, Len {d}, Val ", .{ bfs_entry.offset_bytes, bfs_entry.value_len_bytes }) catch "ERR";
+                current_len = formatted.len;
+                std.debug.print("{s}{s}", .{ YELLOW, formatted});
+
+                for (bfs_entry.value_bytes) |byte| {
+                    if (current_len + 4 > value_column_width) {
+                        std.debug.print("...", .{});
+                        current_len += 3;
+                        break;
+                    }
+                    std.debug.print("\\x{x:0>2}", .{byte});
+                    current_len += 4;
+                }
+                if (current_len < value_column_width) {
+                    var i: usize = 0;
+                    while (i < (value_column_width - current_len)) : (i += 1) {
+                        std.debug.print(" ", .{});
+                    }
+                }
+                std.debug.print("{s}│{s}{s}\n", .{ RESET, DIM, RESET });
             },
         }
 

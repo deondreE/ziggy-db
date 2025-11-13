@@ -30,7 +30,8 @@
 
 - Problem: Keys persist forever.
 
-- [X] Done
+- [x] Done
+
 4. Default expire on creation (TTL)
 
 - Problem: Keys persist forever.
@@ -56,11 +57,15 @@
 
 - Problem: Limited to simple strings, numbers, bools, and basic lists of strings.
 - Action:
-  -  [X] Timestamps/Dates: Add a ValueType.Timestamp and store u64 (Unix epoch time).
+  - [x] Timestamps/Dates: Add a ValueType.Timestamp and store u64 (Unix epoch time).
 
   - JSON/Structured Data: Add ValueType.JSON and store []const u8 (JSON string). Require parsing/validation.
 
-  - Sets: Implement std.StringHashMap(std.AutoHashMap(Value)) (for unique Values) for sets. Add SADD, SREM, SMEMBERS commands.
+  - Bitmap
+
+  - Bitfeild
+
+  - Sets: Implement Unique Array Checks. Add SADD, SREM, SMEMBERS commands.
 
   - Sorted Sets: More complex. Requires std.AutoHashMap where values have a score: f64 and member: Value. Add ZADD, ZRANGE, ZSCORE commands.
 
