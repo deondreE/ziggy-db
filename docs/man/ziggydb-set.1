@@ -1,0 +1,30 @@
+.TH ZIGGYDB-SET 1 "November 2025" "ZiggyDB" "User Commands"
+.SH NAME
+ziggydb-set \- store a value in the ZiggyDB database
+
+.SH SYNOPSIS
+.B ziggydb
+.I "SET key value [EXP seconds] [TYPE type]"
+
+.SH DESCRIPTION
+The
+.B SET
+command inserts or overwrites a value.
+
+Available types:
+STRING, INT, FLOAT, BOOL, BINARY, TIMESTAMP, BITMAP, BITFEILD.
+
+Use
+.B EXP
+to define an expiry time in seconds.
+
+.SH EXAMPLES
+.TP
+Set a string:
+.B ziggy> SET name "Deondre"
+
+.TP
+Set an integer with expiry:
+.B ziggy> SET counter 42 EXP 60 TYPE INT
+
+.fi
