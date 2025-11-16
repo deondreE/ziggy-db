@@ -1,23 +1,65 @@
-//! By convention, root.zig is the root source file when making a library.
 const std = @import("std");
 
-pub fn bufferedPrint() !void {
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
+pub const ConnectionString = @import("connection.zig").ConnectionString;
+pub const LogEntry = @import("wal_log.zig").LogEntry;
+pub const Value = @import("wal_log.zig").Value;
+pub const ValueType = @import("wal_log.zig").ValueType;
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+pub const Database = @import("db.zig").Database;
+pub const printValue = @import("db.zig").printValue;
 
-    try stdout.flush(); // Don't forget to flush!
+pub const Command = enum {
+    help,
+    set,
+    get,
+    del,
+    lpush,
+    lpop,
+    lrange,
+    setbit,
+    getbit,
+    bitfeild,
+    begin,
+    commit,
+    rollback,
+    serve,
+    exit,
+    unknown,
+};
+
+pub fn parseCommand(tok: []const u8) Command {
+    if (std.ascii.eqlIgnoreCase(tok, "HELP")) return .help;
+    if (std.ascii.eqlIgnoreCase(tok, "SET")) return .set;
+    if (std.ascii.eqlIgnoreCase(tok, "GET")) return .get;
+    if (std.ascii.eqlIgnoreCase(tok, "DEL")) return .del;
+    if (std.ascii.eqlIgnoreCase(tok, "LPUSH")) return .lpush;
+    if (std.ascii.eqlIgnoreCase(tok, "LPOP")) return .lpop;
+    if (std.ascii.eqlIgnoreCase(tok, "LRANGE")) return .lrange;
+    if (std.ascii.eqlIgnoreCase(tok, "BEGIN")) return .begin;
+    if (std.ascii.eqlIgnoreCase(tok, "SETBIT")) return .setbit;
+    if (std.ascii.eqlIgnoreCase(tok, "GETBIT")) return .getbit;
+    if (std.ascii.eqlIgnoreCase(tok, "BITFEILD")) return .bitfeild;
+    if (std.ascii.eqlIgnoreCase(tok, "COMMIT")) return .commit;
+    if (std.ascii.eqlIgnoreCase(tok, "ROLLBACK")) return .rollback;
+    if (std.ascii.eqlIgnoreCase(tok, "SERVE")) return .serve;
+    if (std.ascii.eqlIgnoreCase(tok, "EXIT") or std.ascii.eqlIgnoreCase(tok, "QUIT"))
+        return .exit;
+    return .unknown;
 }
 
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
+pub fn enableWindowsAnsiColors() void {
+    if (@import("builtin").os.tag == .windows) {
+        const windows = std.os.windows;
+        const ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+        const STD_OUTPUT_HANDLE: windows.DWORD = @bitCast(@as(i32, -11));
 
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
+        const handle = windows.kernel32.GetStdHandle(STD_OUTPUT_HANDLE) orelse return;
+        if (handle == windows.INVALID_HANDLE_VALUE) return;
+
+        var mode: windows.DWORD = 0;
+        if (windows.kernel32.GetConsoleMode(handle, &mode) == 0) return;
+
+        mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        _ = windows.kernel32.SetConsoleMode(handle, mode);
+    }
 }

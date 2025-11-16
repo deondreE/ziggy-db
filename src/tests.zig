@@ -1,5 +1,5 @@
 const std = @import("std");
-const dbmod = @import("db.zig");
+const root = @import("root.zig");
 
 fn cleanupTestFile(path: []const u8) void {
     std.fs.cwd().deleteFile(path) catch {};
@@ -12,11 +12,11 @@ test "basic SET/GET/DEL operations, and missing keys" {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    const conn = try dbmod.ConnectionString.parse(alloc, "file=tests/test1.log;mode=read_write");
+    const conn = try root.ConnectionString.parse(alloc, "file=tests/test1.log;mode=read_write");
     defer conn.deinit(alloc);
 
     {
-        var db = try dbmod.Database.init(alloc, conn);
+        var db = try root.Database.init(alloc, conn);
         defer db.deinit();
 
         // --- Set/Get
@@ -43,7 +43,7 @@ test "basic SET/GET/DEL operations, and missing keys" {
 
     // Now open a new connection after the first one is closed
     {
-        var db2 = try dbmod.Database.init(alloc, conn);
+        var db2 = try root.Database.init(alloc, conn);
         defer db2.deinit();
         const name_val = db2.get("name");
         try std.testing.expect(name_val != null);
@@ -58,9 +58,9 @@ test "transaction commit and rollback" {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    const conn = try dbmod.ConnectionString.parse(alloc, "file=tests/test_tx.log;mode=read_write");
+    const conn = try root.ConnectionString.parse(alloc, "file=tests/test_tx.log;mode=read_write");
     defer conn.deinit(alloc);
-    var db = try dbmod.Database.init(alloc, conn);
+    var db = try root.Database.init(alloc, conn);
     defer db.deinit();
 
     try db.set("city", "Dallas");
@@ -99,9 +99,9 @@ test "list LPUSH / LPOP / LRANGE" {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    const conn = try dbmod.ConnectionString.parse(alloc, "file=tests/test_list.log;mode=read_write");
+    const conn = try root.ConnectionString.parse(alloc, "file=tests/test_list.log;mode=read_write");
     defer conn.deinit(alloc);
-    var db = try dbmod.Database.init(alloc, conn);
+    var db = try root.Database.init(alloc, conn);
     defer db.deinit();
 
     try db.lpush("mylist", "one");
@@ -125,9 +125,9 @@ test "typed values - Integer, Float, Bool, Timestamp" {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    const conn = try dbmod.ConnectionString.parse(alloc, "file=tests/test_types.log;mode=read_write");
+    const conn = try root.ConnectionString.parse(alloc, "file=tests/test_types.log;mode=read_write");
     defer conn.deinit(alloc);
-    var db = try dbmod.Database.init(alloc, conn);
+    var db = try root.Database.init(alloc, conn);
     defer db.deinit();
 
     // Test Integer
@@ -152,7 +152,7 @@ test "typed values - Integer, Float, Bool, Timestamp" {
     const test_timestamp_key = "event_time";
     const test_timestamp_value: u64 = 1678838400;
 
-    try db.setTyped(test_timestamp_key, dbmod.Value{ .Timestamp = test_timestamp_value }, null);
+    try db.setTyped(test_timestamp_key, root.Value{ .Timestamp = test_timestamp_value }, null);
 
     const event_time = db.get(test_timestamp_key).?;
     try std.testing.expect(event_time == .Timestamp);
@@ -166,18 +166,18 @@ test "WAL replay reproduces correct data" {
     defer _ = gpa.deinit();
     const a = gpa.allocator();
 
-    const conn = try dbmod.ConnectionString.parse(a, "file=tests/test_replay.log;mode=read_write");
+    const conn = try root.ConnectionString.parse(a, "file=tests/test_replay.log;mode=read_write");
     defer conn.deinit(a);
 
     {
-        var db = try dbmod.Database.init(a, conn);
+        var db = try root.Database.init(a, conn);
         defer db.deinit();
         try db.set("x", "1");
         try db.setInt("num", 100);
     }
 
     {
-        var db2 = try dbmod.Database.init(a, conn);
+        var db2 = try root.Database.init(a, conn);
         defer db2.deinit();
 
         const x_val = db2.get("x").?;

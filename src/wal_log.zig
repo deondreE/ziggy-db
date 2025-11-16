@@ -484,7 +484,7 @@ pub const LogEntry = union(OperationType) {
                 var current_len: usize = 0;
                 const formatted = std.fmt.bufPrint(&value_repr_buf, "Off {d}, Len {d}, Val ", .{ bfs_entry.offset_bytes, bfs_entry.value_len_bytes }) catch "ERR";
                 current_len = formatted.len;
-                std.debug.print("{s}{s}", .{ YELLOW, formatted});
+                std.debug.print("{s}{s}", .{ YELLOW, formatted });
 
                 for (bfs_entry.value_bytes) |byte| {
                     if (current_len + 4 > value_column_width) {

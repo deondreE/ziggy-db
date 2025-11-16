@@ -1,62 +1,8 @@
 const std = @import("std");
-const dbmod = @import("db.zig");
-
-const Command = enum {
-    help,
-    set,
-    get,
-    del,
-    lpush,
-    lpop,
-    lrange,
-    setbit,
-    getbit,
-    bitfeild,
-    begin,
-    commit,
-    rollback,
-    exit,
-    unknown,
-};
-
-fn parseCommand(tok: []const u8) Command {
-    if (std.ascii.eqlIgnoreCase(tok, "HELP")) return .help;
-    if (std.ascii.eqlIgnoreCase(tok, "SET")) return .set;
-    if (std.ascii.eqlIgnoreCase(tok, "GET")) return .get;
-    if (std.ascii.eqlIgnoreCase(tok, "DEL")) return .del;
-    if (std.ascii.eqlIgnoreCase(tok, "LPUSH")) return .lpush;
-    if (std.ascii.eqlIgnoreCase(tok, "LPOP")) return .lpop;
-    if (std.ascii.eqlIgnoreCase(tok, "LRANGE")) return .lrange;
-    if (std.ascii.eqlIgnoreCase(tok, "BEGIN")) return .begin;
-    if (std.ascii.eqlIgnoreCase(tok, "SETBIT")) return .setbit;
-    if (std.ascii.eqlIgnoreCase(tok, "GETBIT")) return .getbit;
-    if (std.ascii.eqlIgnoreCase(tok, "BITFEILD")) return .bitfeild;
-    if (std.ascii.eqlIgnoreCase(tok, "COMMIT")) return .commit;
-    if (std.ascii.eqlIgnoreCase(tok, "ROLLBACK")) return .rollback;
-    if (std.ascii.eqlIgnoreCase(tok, "EXIT") or std.ascii.eqlIgnoreCase(tok, "QUIT"))
-        return .exit;
-    return .unknown;
-}
-
-fn enableWindowsAnsiColors() void {
-    if (@import("builtin").os.tag == .windows) {
-        const windows = std.os.windows;
-        const ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
-        const STD_OUTPUT_HANDLE: windows.DWORD = @bitCast(@as(i32, -11));
-
-        const handle = windows.kernel32.GetStdHandle(STD_OUTPUT_HANDLE) orelse return;
-        if (handle == windows.INVALID_HANDLE_VALUE) return;
-
-        var mode: windows.DWORD = 0;
-        if (windows.kernel32.GetConsoleMode(handle, &mode) == 0) return;
-
-        mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-        _ = windows.kernel32.SetConsoleMode(handle, mode);
-    }
-}
+const root = @import("root.zig");
 
 pub fn main() !void {
-    enableWindowsAnsiColors();
+    root.enableWindowsAnsiColors();
     var stdout_buffer: [1024]u8 = undefined;
     var stdin_buffer: [1024]u8 = undefined;
 
@@ -71,10 +17,10 @@ pub fn main() !void {
     const alloc = gpa.allocator();
 
     const conn_str =
-        try dbmod.ConnectionString.parse(alloc, "file=my_kv_store.log;mode=read_write");
+        try root.ConnectionString.parse(alloc, "file=my_kv_store.log;mode=read_write");
     defer conn_str.deinit(alloc);
 
-    var db = try dbmod.Database.init(alloc, conn_str);
+    var db = try root.Database.init(alloc, conn_str);
     defer db.deinit();
 
     const YELLOW = "\x1b[33m";
@@ -122,7 +68,7 @@ pub fn main() !void {
 
         var toks = std.mem.tokenizeAny(u8, trimmed, " ");
         const cmd_tok = toks.next() orelse continue :shell_loop;
-        const command = parseCommand(cmd_tok);
+        const command = root.parseCommand(cmd_tok);
 
         switch (command) {
             .help => {
@@ -152,7 +98,7 @@ pub fn main() !void {
 
                 var val_str: ?[]const u8 = null;
                 var expiry_seconds_from_now: ?u64 = null;
-                var value_type: dbmod.ValueType = dbmod.ValueType.String; // String by default;
+                var value_type: root.ValueType = root.ValueType.String; // String by default;
 
                 var args_temp_alloc = std.array_list.Managed([]const u8).init(alloc);
                 defer args_temp_alloc.deinit();
@@ -182,21 +128,21 @@ pub fn main() !void {
                         }
                         const type_str = args_temp_alloc.items[i + 1];
                         if (std.ascii.eqlIgnoreCase(type_str, "STRING")) {
-                            value_type = dbmod.ValueType.String;
+                            value_type = root.ValueType.String;
                         } else if (std.ascii.eqlIgnoreCase(type_str, "INT")) {
-                            value_type = dbmod.ValueType.Integer;
+                            value_type = root.ValueType.Integer;
                         } else if (std.ascii.eqlIgnoreCase(type_str, "FLOAT")) {
-                            value_type = dbmod.ValueType.Float;
+                            value_type = root.ValueType.Float;
                         } else if (std.ascii.eqlIgnoreCase(type_str, "BOOL")) {
-                            value_type = dbmod.ValueType.Bool;
+                            value_type = root.ValueType.Bool;
                         } else if (std.ascii.eqlIgnoreCase(type_str, "BINARY")) {
-                            value_type = dbmod.ValueType.Binary;
+                            value_type = root.ValueType.Binary;
                         } else if (std.ascii.eqlIgnoreCase(type_str, "TIMESTAMP")) {
-                            value_type = dbmod.ValueType.Timestamp;
+                            value_type = root.ValueType.Timestamp;
                         } else if (std.ascii.eqlIgnoreCase(type_str, "BITMAP")) {
-                            value_type = dbmod.ValueType.Bitmap;
+                            value_type = root.ValueType.Bitmap;
                         } else if (std.ascii.eqlIgnoreCase(type_str, "BITFEILD")) {
-                            value_type = dbmod.ValueType.BitFeild;
+                            value_type = root.ValueType.BitFeild;
                         } else {
                             try stdout.print("Unknown type: {s} (expected STRING, INT, FLOAT, BOOL, BINARY, TIMESTAMP)\n", .{type_str});
                             continue :shell_loop;
@@ -214,15 +160,15 @@ pub fn main() !void {
                 if (val_str == null) {
                     try stdout.print("Missing value\n", .{});
                 } else {
-                    const value_to_set: dbmod.Value = switch (value_type) {
-                        .String => dbmod.Value{ .String = val_str.? },
-                        .Integer => dbmod.Value{ .Integer = try std.fmt.parseInt(i64, val_str.?, 10) },
-                        .Float => dbmod.Value{ .Float = try std.fmt.parseFloat(f64, val_str.?) },
-                        .Bool => if (std.ascii.eqlIgnoreCase(val_str.?, "true")) dbmod.Value{ .Bool = true } else dbmod.Value{ .Bool = false },
-                        .Binary => dbmod.Value{ .Binary = val_str.? },
-                        .Timestamp => dbmod.Value{ .Timestamp = try std.fmt.parseInt(u64, val_str.?, 10) },
-                        .Bitmap => dbmod.Value{ .Bitmap = val_str.? },
-                        .BitFeild => dbmod.Value{ .Bitmap = val_str.? },
+                    const value_to_set: root.Value = switch (value_type) {
+                        .String => root.Value{ .String = val_str.? },
+                        .Integer => root.Value{ .Integer = try std.fmt.parseInt(i64, val_str.?, 10) },
+                        .Float => root.Value{ .Float = try std.fmt.parseFloat(f64, val_str.?) },
+                        .Bool => if (std.ascii.eqlIgnoreCase(val_str.?, "true")) root.Value{ .Bool = true } else root.Value{ .Bool = false },
+                        .Binary => root.Value{ .Binary = val_str.? },
+                        .Timestamp => root.Value{ .Timestamp = try std.fmt.parseInt(u64, val_str.?, 10) },
+                        .Bitmap => root.Value{ .Bitmap = val_str.? },
+                        .BitFeild => root.Value{ .Bitmap = val_str.? },
                     };
 
                     var final_expiry_unix_s: ?u64 = null;
@@ -241,7 +187,8 @@ pub fn main() !void {
                     continue :shell_loop;
                 };
                 if (db.get(key)) |v| {
-                    dbmod.printValue(v);
+                    root.printValue(v);
+
                     try stdout.print("\n", .{});
                 } else try stdout.print("(nil)\n", .{});
             },
@@ -318,7 +265,7 @@ pub fn main() !void {
                     continue :shell_loop;
                 };
 
-                try db.setBit(key, offset, value); 
+                try db.setBit(key, offset, value);
             },
             .getbit => {
                 const key = toks.next() orelse {
@@ -471,6 +418,22 @@ pub fn main() !void {
             .rollback => {
                 db.rollback();
                 try stdout.print("Rolled back.\n", .{});
+            },
+            .serve => {
+                const server = @import("server.zig");
+                const DEFAULT_PORT: u16 = 8080;
+                var port: u16 = DEFAULT_PORT;
+                if (toks.next()) |port_str| {
+                    port = std.fmt.parseInt(u16, port_str, 10) catch |err| {
+                        return try stdout.print("Invalid port number '{s}' ({any}). Using default {any}\n", .{ port_str, @errorName(err), DEFAULT_PORT });
+                    };
+                }
+                try stdout.print("Starting server on port {any}...\n", .{port});
+
+                try server.startTcpServer(db, port, alloc);
+
+                // If server stops due to an erorr program will reset here.
+                try stdout.print("Server stopped.\n", .{});
             },
             .exit => {
                 try stdout.print("Goodbye!\n", .{});

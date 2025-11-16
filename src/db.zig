@@ -297,6 +297,7 @@ pub const Database = struct {
 
     pub fn setTyped(self: *Database, key: []const u8, v: Value, expiry_unix_s: ?u64) !void {
         var raw_buf: [8]u8 = undefined;
+
         const tmp: []const u8 = switch (v) {
             .String => v.String,
             .Bitmap => v.Bitmap,
@@ -667,7 +668,7 @@ pub const Database = struct {
                 const byte_len = (bit_offset / 8) + 1;
                 bitmap_bytes = try self.allocator.alloc(u8, byte_len);
                 @memset(bitmap_bytes, 0);
-            } 
+            }
         } else {
             const byte_len = (bit_offset / 8) + 1;
             bitmap_bytes = try self.allocator.alloc(u8, byte_len);
@@ -841,7 +842,7 @@ pub const Database = struct {
                         if (byte_offset < bitfield_bytes.len) {
                             @memcpy(result[0..bytes_to_copy], bitfield_bytes[byte_offset .. byte_offset + bytes_to_copy]);
                         }
-                        
+
                         return result;
                     }
                 }
