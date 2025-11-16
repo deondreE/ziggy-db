@@ -853,6 +853,51 @@ pub const Database = struct {
         }
         return null;
     }
+
+    fn importFromJson(self: *Database, json_string: []const u8) !void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const json_allocator = arena.allocator();
+
+        const json_value = try std.json.parseFromSlice(std.json.Value, json_allocator, json_string, .{ .skip_unknown_feilds = true });
+
+        if (json_value.object == null) {
+            std.debug.print("Error: JSON import expects a top-level object. \n", .{});
+            return error.InvalidFormatJSON;
+        }
+        var it = json_value.object.?.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+
+            switch (val.get_type()) {
+                .String => {
+                    if (val.string) |s| {
+                        try self.setTyped(key, Value{ .String = s }, null);
+                    }
+                },
+                .Number => {
+                    if (val.float) |f| {
+                        if (f == @floor(f)) {
+                            if (f >= @as(f32, std.math.minInt(i64)) and f <= @as(f64, std.math.maxInt(i64))) {
+                                try self.setTyped(key, Value{ .Integer = @intFromFloat(f) }, null);
+                            } else {
+                                try self.setTyped(key, Value{ .Float = f }, null);
+                            }
+                        } else {
+                            try self.setTyped(key, Value{ .Float = f }, null);
+                        }
+                    } else if (val.integer) |i| {
+                        if (i >= @as(i128, std.math.maxInt(i64)) and i <= @as(i128, std.math.maxInt(i64))) {
+                            try self.setTyped(key, Value{ .Integer = @intCast(i) }, null);
+                        } else {
+                            std.debug.print("Warning: Integer value for key '{s}' is out of i64 range, skipping.\n", .{key});
+                        }
+                    }
+                },
+            }
+        }
+    }
 };
 
 pub fn printValue(value: Value) void {
