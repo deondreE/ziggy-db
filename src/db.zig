@@ -854,47 +854,171 @@ pub const Database = struct {
         return null;
     }
 
-    fn importFromJson(self: *Database, json_string: []const u8) !void {
+    pub fn importFromJson(self: *Database, json_string: []const u8) !void {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const json_allocator = arena.allocator();
 
-        const json_value = try std.json.parseFromSlice(std.json.Value, json_allocator, json_string, .{ .skip_unknown_feilds = true });
+        const parsed_root = try std.json.parseFromSlice(std.json.Value, json_allocator, json_string, .{ .ignore_unknown_fields = true });
+        const json_value = parsed_root.value;
 
-        if (json_value.object == null) {
-            std.debug.print("Error: JSON import expects a top-level object. \n", .{});
-            return error.InvalidFormatJSON;
-        }
-        var it = json_value.object.?.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const val = entry.value_ptr.*;
+        switch (json_value) {
+            .object => |obj_map| {
+                // The top-level is an object, proceed with iteration
+                var it = obj_map.iterator();
+                while (it.next()) |entry| {
+                    const key = entry.key_ptr.*;
+                    const val = entry.value_ptr.*; // val is also your custom Value union
 
-            switch (val.get_type()) {
-                .String => {
-                    if (val.string) |s| {
-                        try self.setTyped(key, Value{ .String = s }, null);
-                    }
-                },
-                .Number => {
-                    if (val.float) |f| {
-                        if (f == @floor(f)) {
-                            if (f >= @as(f32, std.math.minInt(i64)) and f <= @as(f64, std.math.maxInt(i64))) {
-                                try self.setTyped(key, Value{ .Integer = @intFromFloat(f) }, null);
+                    switch (val) {
+                        .string => |s| {
+                            try self.setTyped(key, Value{ .String = s }, null); // Your db.Value (wal_log.zig)
+                        },
+                        .integer => |i| {
+                            try self.setTyped(key, Value{ .Integer = i }, null);
+                        },
+                        .float => |f| {
+                            const i_val: i64 = @intFromFloat(f);
+                            const f_val: f64 = @floatFromInt(i_val);
+                            if (f_val == f) { // Round-trip check for perfect representation
+                                try self.setTyped(key, Value{ .Integer = i_val }, null);
                             } else {
                                 try self.setTyped(key, Value{ .Float = f }, null);
                             }
-                        } else {
-                            try self.setTyped(key, Value{ .Float = f }, null);
-                        }
-                    } else if (val.integer) |i| {
-                        if (i >= @as(i128, std.math.maxInt(i64)) and i <= @as(i128, std.math.maxInt(i64))) {
-                            try self.setTyped(key, Value{ .Integer = @intCast(i) }, null);
-                        } else {
-                            std.debug.print("Warning: Integer value for key '{s}' is out of i64 range, skipping.\n", .{key});
-                        }
+                        },
+                        .bool => |b| {
+                            try self.setTyped(key, Value{ .Bool = b }, null);
+                        },
+                        .null => {
+                            _ = try self.del(key);
+                        },
+                        .array => |json_array_list| {
+                            for (json_array_list.items) |array_val| {
+                                switch (array_val) {
+                                    .string => |s| {
+                                        try self.lpush(key, s);
+                                    },
+                                    .integer => |i| {
+                                        var num_buf: [32]u8 = undefined;
+                                        const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch "ERR";
+                                        try self.lpush(key, num_str);
+                                    },
+                                    .float => |f| {
+                                        var num_buf: [64]u8 = undefined; // Use MAX_FLOAT_STR_LEN for floats
+                                        const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{f}) catch "ERR";
+                                        try self.lpush(key, num_str);
+                                    },
+                                    .bool => |b| {
+                                        if (b) try self.lpush(key, "true") else try self.lpush(key, "false");
+                                    },
+                                    .null => {
+                                        try self.lpush(key, "(null)");
+                                    },
+                                    .object, .array, .number_string => {
+                                        std.debug.print("Warning: Nested JSON object/array/number_string for list key '{s}' not supported, skipping.\n", .{key});
+                                    },
+                                }
+                            }
+                        },
+                        .object => {
+                            std.debug.print("Warning: Nested JSON object for key '{s}' not supported, skipping.\n", .{key});
+                        },
+                        .number_string => |s_num| { // Handle number_string explicitly
+                            std.debug.print("Warning: Number string for key '{s}' encountered, storing as string.\n", .{key});
+                            try self.setTyped(key, Value{ .String = s_num }, null);
+                        },
                     }
-                },
+                }
+            },
+            else => {
+                // Top-level is not an object
+                std.debug.print("Error: JSON import expects a top-level object. \n", .{});
+                return error.InvalidFormatJSON;
+            },
+        }
+    }
+
+    pub fn exportToJsonFile(self: *Database, file_path: []const u8) !void {
+        // 1️⃣ Create / truncate the file
+        var file = try std.fs.cwd().createFile(file_path, .{
+            .truncate = true,
+            .read = false,
+        });
+        defer file.close();
+
+        // 2️⃣ Small buffer required for File.writer
+        var buf: [4096]u8 = undefined;
+
+        // 3️⃣ Get a buffered writer that already implements *Io.Writer*
+        var file_writer = file.writer(&buf);
+        const io_writer = &file_writer.interface; // <-- .interface field is the actual Io.Writer
+
+        // 4️⃣ Create a JSON stringifier that writes via that interface
+        var stringify = std.json.Stringify{
+            .writer = io_writer,
+            .options = .{
+                .whitespace = .indent_2,
+                .emit_null_optional_fields = false,
+            },
+        };
+
+        // 5️⃣ Serialize, newline, flush, and sync
+        try stringify.write(self);
+        try io_writer.writeByte('\n');
+        try stringify.writer.flush();
+        try file.sync();
+    }
+
+    pub fn jsonStringify(self: *const Database, jw: anytype) !void {
+        try jw.beginObject();
+        defer _ = jw.endObject() catch {};
+
+        // -----------------------------
+        // Serialize the key-value map
+        // -----------------------------
+        try jw.objectField("map");
+        try jw.beginObject();
+        defer _ = jw.endObject() catch {};
+
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val_meta = entry.value_ptr.*;
+
+            try jw.objectField(key); // key name in "map"
+            try jw.beginObject();
+            defer _ = jw.endObject() catch {};
+
+            // value{ value, expiry_unix_s }
+            try jw.objectField("value");
+            try jw.write(val_meta.value);
+
+            try jw.objectField("expiry_unix_s");
+            if (val_meta.expiry_unix_s) |exp| {
+                try jw.write(exp);
+            } else {
+                try jw.write(null);
+            }
+        }
+
+        // -----------------------------
+        // Serialize the lists
+        // -----------------------------
+        try jw.objectField("lists");
+        try jw.beginObject();
+        defer _ = jw.endObject() catch {};
+
+        var lit = self.lists.iterator();
+        while (lit.next()) |entry| {
+            const list_key = entry.key_ptr.*;
+            const arr = entry.value_ptr.*;
+
+            try jw.objectField(list_key);
+            try jw.beginArray();
+            defer _ = jw.endArray() catch {};
+
+            for (arr.items) |item| {
+                try jw.write(item);
             }
         }
     }

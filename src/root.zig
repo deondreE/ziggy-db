@@ -6,6 +6,7 @@ pub const Value = @import("wal_log.zig").Value;
 pub const ValueType = @import("wal_log.zig").ValueType;
 
 pub const Database = @import("db.zig").Database;
+pub const ValueWithMetadata = @import("db.zig").ValueWithMetadata;
 pub const printValue = @import("db.zig").printValue;
 
 pub const Command = enum {
@@ -23,6 +24,8 @@ pub const Command = enum {
     commit,
     rollback,
     serve,
+    importjson,
+    exportjson,
     exit,
     unknown,
 };
@@ -41,6 +44,8 @@ pub fn parseCommand(tok: []const u8) Command {
     if (std.ascii.eqlIgnoreCase(tok, "BITFEILD")) return .bitfeild;
     if (std.ascii.eqlIgnoreCase(tok, "COMMIT")) return .commit;
     if (std.ascii.eqlIgnoreCase(tok, "ROLLBACK")) return .rollback;
+    if (std.ascii.eqlIgnoreCase(tok, "IMPORTJSON")) return .importjson;
+    if (std.ascii.eqlIgnoreCase(tok, "EXPORTJSON")) return .exportjson;
     if (std.ascii.eqlIgnoreCase(tok, "SERVE")) return .serve;
     if (std.ascii.eqlIgnoreCase(tok, "EXIT") or std.ascii.eqlIgnoreCase(tok, "QUIT"))
         return .exit;

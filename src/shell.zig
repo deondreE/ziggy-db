@@ -49,7 +49,7 @@ pub fn main() !void {
         \\
     , .{ YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, YELLOW, RESET, CYAN, RESET, YELLOW, RESET });
 
-    shell_loop: while (true) { // FIX: Labeled while loop
+    shell_loop: while (true) {
         try stdout.print("ziggy> ", .{});
         try stdout.flush();
 
@@ -84,6 +84,9 @@ pub fn main() !void {
                     \\  GETBIT key offset
                     \\  BITFEILD key [SET <type> <offset_bytes> <value_str>] [GET <type> <offset_bytes>]
                     \\      Types: u8, u16, u32, u64
+                    \\  SERVE 
+                    \\  IMPORTJSON <json_string>
+                    \\  EXPORTJSON 
                     \\  BEGIN / COMMIT / ROLLBACK
                     \\  HELP / EXIT
                     \\-------------------------------------------
@@ -434,6 +437,27 @@ pub fn main() !void {
 
                 // If server stops due to an erorr program will reset here.
                 try stdout.print("Server stopped.\n", .{});
+            },
+            .importjson => {
+                const json_data = toks.next() orelse {
+                    try stdout.print("Erorr: IMPORTJSON missing json string", .{});
+                    continue :shell_loop;
+                };
+
+                db.importFromJson(json_data) catch |err| {
+                    try stdout.print("Error importing JSON: {s}\n", .{@errorName(err)});
+                    continue :shell_loop;
+                };
+
+                try stdout.print("Ok\n", .{});
+            },
+            .exportjson => {
+                db.exportToJsonFile("data.json") catch |err| {
+                    try stdout.print("Error exporting JSON: {s}\n", .{@errorName(err)});
+                    continue :shell_loop;
+                };
+
+                try stdout.print("JSON export complete!\n", .{});
             },
             .exit => {
                 try stdout.print("Goodbye!\n", .{});
