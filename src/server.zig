@@ -9,14 +9,31 @@ const ClientHandler = struct {
     fn handleClient(self: ClientHandler) void {
         var read_buf: [1024]u8 = undefined;
         var write_buf: [1024]u8 = undefined;
-        const client_out = self.client_stream.writer(&write_buf);
-        const client_in = self.client_stream.reader(&read_buf);
+        var client_out = self.client_stream.writer(&write_buf);
+        var client_in = self.client_stream.reader(&read_buf);
 
-        _ = client_in;
-        _ = client_out;
+        // _ = client_in;
+        _ = client_out.interface.write("Testing this connection") catch |err| {
+            std.debug.print("{s}", .{@errorName(err)});
+        };
 
-        while (true) {
-            std.Thread.sleep(1000);
+        _ = client_out.interface.flush() catch |err| {
+            std.debug.print("{s}", .{@errorName(err)});
+        };
+       while (true) {
+            const data = client_in.interface_state.buffered(); 
+
+
+            std.debug.print("Received command: {s}\n", .{data});
+
+            _ = client_out.interface.write("Command received\n") catch |err| {
+                std.debug.print("write error: {s}\n", .{@errorName(err)});
+            };
+            _ = client_out.interface.flush() catch |err| {
+                std.debug.print("flush error: {s}\n", .{@errorName(err)});
+            };
+
+            // std.Thread.sleep(1000);
         }
 
         self.client_stream.close();
