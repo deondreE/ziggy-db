@@ -1,9 +1,11 @@
 const std = @import("std");
 const root = @import("root.zig");
+const cluster = @import("cluster.zig");
 
 const ClientHandler = struct {
     client_stream: std.net.Stream,
     db: root.Database,
+    cluster: ?cluster.ClusterState,
     allocator: std.mem.Allocator,
 
     fn handleClient(self: ClientHandler) void {
@@ -41,6 +43,21 @@ const ClientHandler = struct {
     }
 };
 
+const ClusterConnectionHandler = struct {
+    conn: std.net.Server,
+    cluster: *cluster.ClusterState,
+    db: root.Database,
+    allocator: std.mem.Allocator,
+
+    fn run(self: ClusterConnectionHandler) void {
+        _ = self;
+        // cluster.handleClusterConnection(self.conn, self.cluster, self.db, self.allocator) catch |err| {
+        //     std.debug.print("[CLUSTER] connection error: {any}\n", .{@errorName(err)});
+        // };
+        // self.conn.stream.close();
+    }
+};
+
 pub fn startTcpServer(db: root.Database, port: u16, allocator: std.mem.Allocator) !void {
     const address = try std.net.Address.parseIp("0.0.0.0", port);
     var listener = address.listen(.{ .reuse_address = true }) catch |err| {
@@ -72,6 +89,7 @@ pub fn startTcpServer(db: root.Database, port: u16, allocator: std.mem.Allocator
             .client_stream = client_stream.stream,
             .db = db,
             .allocator = allocator,
+            .cluster = null,
         };
 
         const thread = try std.Thread.spawn(.{}, ClientHandler.handleClient, .{handler});
