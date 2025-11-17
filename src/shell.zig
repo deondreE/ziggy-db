@@ -88,6 +88,7 @@ pub fn main() !void {
                     \\  IMPORTJSON <json_string>
                     \\  EXPORTJSON 
                     \\  BEGIN / COMMIT / ROLLBACK
+                    \\  CLS
                     \\  HELP / EXIT
                     \\-------------------------------------------
                     \\
@@ -463,7 +464,11 @@ pub fn main() !void {
                 try stdout.print("Goodbye!\n", .{});
                 break;
             },
-
+            .cls => {
+                // ANSI escpae sequence for "clear screen"
+                try stdout.print("\x1b[2J\x1b[H", .{});
+                continue :shell_loop;
+            },
             .unknown => {
                 try stdout.print("Unknown command.\n", .{});
             },

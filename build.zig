@@ -9,6 +9,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    
     const mod = b.addModule("testing_zig", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -23,29 +24,50 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
 
             .imports = &.{
-                .{ .name = "testing_zig", .module = mod },
+                .{ .name = "testing_zig", .module = mod }
             },
         }),
     });
-
     b.installArtifact(exe);
 
-    // TODO: Convert the man pages to HTML for windows context.
-    const target_info = b.graph.host;
-    const is_windows = target_info.result.os.tag == .windows;
+    const bindings_lib = b.addLibrary(.{
+        .name = "ziggy_bindings",
+        .linkage = .dynamic,
+        .version = .{ .major = 0, .minor = 0, .patch = 1 },
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bindings.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
 
-    if (is_windows) {
-        b.installDirectory(.{
-            .source_dir = b.path("docs/man"),
-            .install_dir = .prefix,
-            .install_subdir = "share/docs/ziggydb", // easier to open in explorer.
-        });
-    } else {
-        b.installDirectory(.{
-            .source_dir = b.path("docs/man/"),
-            .install_dir = .prefix,
-            .install_subdir = "share/man/man1",
-        });
+    _ =bindings_lib.getEmittedH();
+   b.installArtifact(bindings_lib);
+    
+    const is_release =
+        optimize == .ReleaseSafe or
+        optimize == .ReleaseFast or
+        optimize == .ReleaseSmall;
+
+    if (is_release) {
+        // TODO: Convert the man pages to HTML for windows context.
+        const target_info = b.graph.host;
+        const is_windows = target_info.result.os.tag == .windows;
+
+        if (is_windows) {
+            b.installDirectory(.{
+                .source_dir = b.path("docs/man"),
+                .install_dir = .prefix,
+                .install_subdir = "share/docs/ziggydb", // easier to open in explorer.
+            });
+        } else {
+            b.installDirectory(.{
+                .source_dir = b.path("docs/man/"),
+                .install_dir = .prefix,
+                .install_subdir = "share/man/man1",
+            });
+        }
     }
 
     const run_step = b.step("run", "Run the app");

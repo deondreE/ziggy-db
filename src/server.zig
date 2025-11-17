@@ -17,23 +17,24 @@ const ClientHandler = struct {
             std.debug.print("{s}", .{@errorName(err)});
         };
 
+        // User: SET <Key> <Value>, GET <Key> <Value>
         _ = client_out.interface.flush() catch |err| {
             std.debug.print("{s}", .{@errorName(err)});
         };
-       while (true) {
-            const data = client_in.interface_state.buffered(); 
 
+        const data = client_in.interface_state.buffered();
 
-            std.debug.print("Received command: {s}\n", .{data});
+        std.debug.print("Received command: {any}\n", .{data.ptr});
 
-            _ = client_out.interface.write("Command received\n") catch |err| {
-                std.debug.print("write error: {s}\n", .{@errorName(err)});
-            };
-            _ = client_out.interface.flush() catch |err| {
-                std.debug.print("flush error: {s}\n", .{@errorName(err)});
-            };
+        _ = client_out.interface.write("Command received\n") catch |err| {
+            std.debug.print("write error: {s}\n", .{@errorName(err)});
+        };
+        _ = client_out.interface.flush() catch |err| {
+            std.debug.print("flush error: {s}\n", .{@errorName(err)});
+        };
 
-            // std.Thread.sleep(1000);
+        while (true) {
+            std.Thread.sleep(1000);
         }
 
         self.client_stream.close();

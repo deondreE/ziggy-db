@@ -4,6 +4,9 @@
 
 - Status: DONE! (Implemented ValueType and val_type in LogEntry.Set and deserialization). This was the most crucial architectural fix.
 
+- [ ] Command reader for the TCP connections.
+
+
 2. Robust List Implementation (Value-Aware Lists)
 
 3. Transactional Itegrity(WAL & Crash Recovery)
@@ -14,7 +17,7 @@
 
 - Problem: Value.Binary is currently used for arbitrary binary data, but printValue and shell.get use {s} which implies UTF-8. If truly arbitrary binary data is stored, this could print garbage or error.
 
-5. Fix platform dependent windows code.
+- [X] Fix platform dependent windows code.
 
 ## Extended Data Types && Advanced Features
 
@@ -44,12 +47,12 @@
 
 - [ ] Export formats
   - CSV
-  - JSON
+  - [X] JSON
   - EXCL
 - Command that is `EXPORT [TYPE|CSV|EXCEL|JSON]`
 - [ ] Import formats
   - CSV
-  - JSON
+  - [X] JSON
   - EXCL
 - Command that is `IMPORT [TYPE|CSV|EXCEL|JSON]`
 
@@ -92,6 +95,7 @@
 ### Phase 4: Shell Usability & Polish (Lower Priority)
 
 1. History & Autocomplete
+2. Clear Screen command
 
 ## Language Bindings (Phase 3: Expanding Reach)
 

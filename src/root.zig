@@ -26,6 +26,7 @@ pub const Command = enum {
     serve,
     importjson,
     exportjson,
+    cls,
     exit,
     unknown,
 };
@@ -47,6 +48,7 @@ pub fn parseCommand(tok: []const u8) Command {
     if (std.ascii.eqlIgnoreCase(tok, "IMPORTJSON")) return .importjson;
     if (std.ascii.eqlIgnoreCase(tok, "EXPORTJSON")) return .exportjson;
     if (std.ascii.eqlIgnoreCase(tok, "SERVE")) return .serve;
+    if (std.ascii.eqlIgnoreCase(tok, "CLS")) return .cls;
     if (std.ascii.eqlIgnoreCase(tok, "EXIT") or std.ascii.eqlIgnoreCase(tok, "QUIT"))
         return .exit;
     return .unknown;

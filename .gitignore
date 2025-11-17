@@ -1,6 +1,8 @@
-.zig-out
+zig-out
 .zig-cache
 .idea
 .venv
 tests
 *.json
+target
+cmake*

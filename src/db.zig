@@ -939,21 +939,17 @@ pub const Database = struct {
     }
 
     pub fn exportToJsonFile(self: *Database, file_path: []const u8) !void {
-        // 1️⃣ Create / truncate the file
         var file = try std.fs.cwd().createFile(file_path, .{
             .truncate = true,
             .read = false,
         });
         defer file.close();
 
-        // 2️⃣ Small buffer required for File.writer
         var buf: [4096]u8 = undefined;
 
-        // 3️⃣ Get a buffered writer that already implements *Io.Writer*
         var file_writer = file.writer(&buf);
-        const io_writer = &file_writer.interface; // <-- .interface field is the actual Io.Writer
+        const io_writer = &file_writer.interface; 
 
-        // 4️⃣ Create a JSON stringifier that writes via that interface
         var stringify = std.json.Stringify{
             .writer = io_writer,
             .options = .{
@@ -962,7 +958,6 @@ pub const Database = struct {
             },
         };
 
-        // 5️⃣ Serialize, newline, flush, and sync
         try stringify.write(self);
         try io_writer.writeByte('\n');
         try stringify.writer.flush();
