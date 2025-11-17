@@ -8,7 +8,7 @@ Fast Independent key-value store, with simple interop for cluster context.
 
 Traditional kv stores are used alongside traditional DBs. Making the setup process twice the headache, making sure your cache layer talks to the proper table. It's a nightmare. 
 
-<img src="./assets/kvstore.png" alt="kv_example" />
+<img src="./assets/arch.png" alt="kv_example" />
 
 > What if the kv-store just host a relational [Sentinel](https://redis.io/learn/operate/redis-at-scale/high-availability/understanding-sentinels) ?
 
