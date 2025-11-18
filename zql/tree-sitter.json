@@ -1,0 +1,20 @@
+{
+  "abi_version": 15,
+  "metadata": {
+    "version": "0.1.0",
+    "license": "Apache-2.0",
+    "description": "Tree‑sitter grammar for the Ziggy Query Language (ZQL) used by Ziggy Cold."
+  },
+  "grammars": [
+    {
+      "name": "zql",
+      "scope": "source.zql",
+      "file-types": ["zql"],
+      "metadata": {
+        "version": "0.1.0",
+        "license": "Apache-2.0",
+        "description": "ZQL query language grammar definition."
+      }
+    }
+  ]
+}

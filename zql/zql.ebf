@@ -1,0 +1,117 @@
+/* -----------------------------------------------------------
+   Ziggy Query Language (ZQL)
+   Grammar Specification  — Draft v0.1
+----------------------------------------------------------- */
+
+/* ----------  ROOT  ---------- */
+query            ::= statement_list ;
+statement_list   ::= statement (";" statement)* ";"? ;
+statement        ::= select_stmt
+                   | alter_stmt
+                   | show_stmt
+                   | diff_stmt
+                   | rollback_stmt
+                   | explain_stmt
+                   | create_func_stmt ;
+
+/* ----------  SELECT  ---------- */
+select_stmt      ::= "SELECT" select_list
+                      from_clause?
+                      where_clause?
+                      temporal_clause?
+                      group_clause?
+                      order_clause?
+                      limit_clause? ;
+
+select_list      ::= "*" | (select_item ("," select_item)*) ;
+select_item      ::= expr ("AS" ident)? ;
+
+from_clause      ::= "FROM" from_source ( join_clause )* ;
+from_source      ::= ident
+                      ( "AS" ident )?
+                      | "hot" "(" ident ")"
+                      | "cold" "(" ident ")" ;
+
+join_clause      ::= join_type "JOIN" from_source "ON" expr ;
+join_type        ::= "INNER" | "LEFT" | "RIGHT" | "FULL" | /* implicit */ ;
+
+where_clause     ::= "WHERE" expr ;
+group_clause     ::= "GROUP" "BY" expr_list ;
+order_clause     ::= "ORDER" "BY" order_list ;
+limit_clause     ::= "LIMIT" int_lit ;
+
+order_list       ::= order_term ("," order_term)* ;
+order_term       ::= expr ("ASC" | "DESC")? ;
+
+/* ----------  TEMPORAL CLAUSES  ---------- */
+temporal_clause  ::= ("AS" "OF" time_expr)
+                   | ("AT" "VERSION" int_lit)
+                   | ("BETWEEN" time_expr "AND" time_expr) ;
+
+time_expr        ::= string_lit | timestamp_lit ;
+
+/* ----------  MANAGE SCHEMA  ---------- */
+alter_stmt       ::= "ALTER" "TABLE" ident alter_action_list ;
+alter_action_list::= alter_action ("," alter_action)* ;
+alter_action     ::= "ADD" "COLUMN" column_def
+                   | "DROP" "COLUMN" ident
+                   | "COERCE" ident "TO" type_name ;
+
+column_def       ::= ident type_name (default_clause)? ;
+default_clause   ::= "DEFAULT" literal ;
+
+/* ----------  SCHEMA & METADATA  ---------- */
+show_stmt        ::= "SHOW" "SCHEMA" ("FOR" ident)?
+                   | "SHOW" "VERSION" ("TREE" "FOR" ident)?
+                   | "SHOW" "STORAGE" "MAP" "FOR" ident ;
+diff_stmt        ::= "DIFF" "SCHEMA" ident "VERSION" int_lit "TO" int_lit ;
+rollback_stmt    ::= "ROLLBACK" "SCHEMA" ident "TO" "VERSION" int_lit ;
+explain_stmt     ::= "EXPLAIN" "PLAN" "FOR" select_stmt ;
+
+/* ----------  FUNCTIONS  ---------- */
+create_func_stmt ::= "CREATE" "FUNCTION" ident
+                     "(" param_list? ")"
+                     "RETURNS" type_name
+                     "AS" code_block ;
+
+param_list       ::= param ("," param)* ;
+param            ::= ident type_name? ;
+code_block       ::= "{" code_body "}" ;
+code_body        ::= (!"}" .)* ;   // Arbitrary Zig/WASM payload
+
+/* ----------  EXPRESSIONS  ---------- */
+expr             ::= expr_or ;
+expr_or          ::= expr_and ("OR" expr_and)* ;
+expr_and         ::= expr_not ("AND" expr_not)* ;
+expr_not         ::= ("NOT")? expr_cmp ;
+expr_cmp         ::= expr_add (cmp_op expr_add)? ;
+cmp_op           ::= "=" | "!=" | "<" | ">" | "<=" | ">=" | "LIKE" | "IN" ;
+
+expr_add         ::= expr_mul (("+"|"-") expr_mul)* ;
+expr_mul         ::= expr_unary (("*"|"/") expr_unary)* ;
+expr_unary       ::= ("+"|"-"|"NOT")? expr_primary ;
+
+expr_primary     ::= literal
+                   | ident
+                   | ident "." ident
+                   | ident "->" string_lit
+                   | ident "?." ident
+                   | "(" expr ")"
+                   | function_call ;
+
+expr_list        ::= expr ("," expr)* ;
+function_call    ::= ident "(" expr_list? ")" ;
+
+/* ----------  LITERALS / TYPES  ---------- */
+literal          ::= int_lit | float_lit | string_lit | bool_lit | "NULL" ;
+int_lit          ::= [0-9]+ ;
+float_lit        ::= [0-9]+ ("." [0-9]+)? ;
+string_lit       ::= "'" (!"'" .)* "'" ;
+timestamp_lit    ::= "TIMESTAMP" "'" (!"'" .)* "'" ;
+bool_lit         ::= "TRUE" | "FALSE" ;
+
+type_name        ::= "INT" | "FLOAT" | "TEXT" | "BOOLEAN" 
+                   | "TIMESTAMP" | "JSON" | "VARIANT" ;
+
+/* ----------  IDENTIFIERS  ---------- */
+ident            ::= [A-Za-z_][A-Za-z0-9_]* ;

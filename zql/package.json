@@ -1,0 +1,41 @@
+{
+  "name": "treesitter-zql",
+  "version": "0.1.0",
+  "description": "Tree-sittergrammer for the Ziggy Query Language (ZQL) used by Ziggy Cold.",
+  "keywords": [
+    "tree-sitter",
+    "zql",
+    "ziggy",
+    "query-language",
+    "database",
+    "parser",
+    "grammer"
+  ],
+  "private": false,
+  "author": "deondreE",
+  "license": "Apache-2.0",
+  "main": "bindings/node",
+  "scripts": {
+    "build": "tree-sitter generate && tree-sitter build",
+    "test": "tree-sitter test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "tree-sitter-cli": "^0.25.10"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.zql",
+      "file-types": [
+        "zql"
+      ],
+      "injection-regex": "^zql$",
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "folds": "queries/folds.scm"
+    }
+  ]
+}

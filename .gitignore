@@ -3,6 +3,6 @@ zig-out
 .idea
 .venv
 tests
-*.json
+data.json
 target
 cmake*
