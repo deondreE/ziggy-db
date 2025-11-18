@@ -20,6 +20,9 @@ pub const ValueType = enum(u8) {
     BitFeild,
 };
 
+pub const MAX_KEY_SIZE = 4096;
+pub const MAX_VALUE_SIZE = 1 << 20; // 1 MB safety limit.
+
 pub const Value = union(ValueType) {
     String: []const u8,
     Integer: i64,
@@ -69,79 +72,73 @@ pub const LogEntry = union(OperationType) {
     },
 
     pub fn serialize(self: LogEntry, file: std.fs.File) !void {
-        var tag: [1]u8 = .{@intFromEnum(self)};
-        try file.writeAll(&tag);
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
 
-        var buf4: [4]u8 = undefined;
+        var buf = std.ArrayList(u8).empty;
+        defer buf.deinit(alloc);
+
+        const w = buf.writer(alloc);
+
+        try w.writeByte(@intFromEnum(self));
+
+        var tmp4: [4]u8 = undefined;
+        var tmp8: [8]u8 = undefined;
 
         switch (self) {
-            .Set => |s_entry| {
-                var vt: [1]u8 = .{@intFromEnum(s_entry.val_type)};
-                try file.writeAll(&vt);
-
-                std.mem.writeInt(u32, &buf4, s_entry.key_len, .little);
-                try file.writeAll(&buf4);
-                std.mem.writeInt(u32, &buf4, s_entry.value_len, .little);
-                try file.writeAll(&buf4);
-                try file.writeAll(s_entry.key);
-                try file.writeAll(s_entry.raw_value);
-
-                // Expiry
-                var has_expiry_byte: [1]u8 = undefined;
-                if (s_entry.expiry_unix_s) |expiry| {
-                    has_expiry_byte[0] = 1;
-                    try file.writeAll(&has_expiry_byte);
-                    var buf8: [8]u8 = undefined;
-                    std.mem.writeInt(u64, &buf8, expiry, .little);
-                    try file.writeAll(&buf8);
-                } else {
-                    has_expiry_byte[0] = 0;
-                    try file.writeAll(&has_expiry_byte);
+            .Set => |s| {
+                try w.writeByte(@intFromEnum(s.val_type));
+                std.mem.writeInt(u32, &tmp4, s.key_len, .little);
+                try w.writeAll(&tmp4);
+                std.mem.writeInt(u32, &tmp4, s.value_len, .little);
+                try w.writeAll(&tmp4);
+                try w.writeAll(s.key);
+                try w.writeAll(s.raw_value);
+                try w.writeByte(if (s.expiry_unix_s) |_| 1 else 0);
+                if (s.expiry_unix_s) |exp| {
+                    std.mem.writeInt(u64, &tmp8, exp, .little);
                 }
             },
-            .Delete => |d_entry| {
-                std.mem.writeInt(u32, &buf4, d_entry.key_len, .little);
-                try file.writeAll(&buf4);
-                try file.writeAll(d_entry.key);
+            .Delete => |d| {
+                std.mem.writeInt(u32, &tmp4, d.key_len, .little);
+                try w.writeAll(&tmp4);
+                try w.writeAll(d.key);
             },
             .ListPush => |lp| {
-                std.mem.writeInt(u32, &buf4, lp.key_len, .little);
-                try file.writeAll(&buf4);
-                try file.writeAll(lp.key);
-
-                std.mem.writeInt(u32, &buf4, lp.value_len, .little);
-                try file.writeAll(&buf4);
-                try file.writeAll(lp.value);
+                std.mem.writeInt(u32, &tmp4, lp.key_len, .little);
+                try w.writeAll(&tmp4);
+                try w.writeAll(lp.key);
+                std.mem.writeInt(u32, &tmp4, lp.value_len, .little);
+                try w.writeAll(&tmp4);
+                try w.writeAll(lp.value);
             },
             .ListPop => |lp| {
-                std.mem.writeInt(u32, &buf4, lp.key_len, .little);
-                try file.writeAll(&buf4);
-                try file.writeAll(lp.key);
+                std.mem.writeInt(u32, &tmp4, lp.key_len, .little);
+                try w.writeAll(&tmp4);
+                try w.writeAll(lp.key);
             },
-            .BitmapSetBit => |bsb_entry| {
-                var buf1: [1]u8 = undefined;
-                std.mem.writeInt(u32, &buf4, bsb_entry.key_len, .little);
-                try file.writeAll(&buf4);
-                try file.writeAll(bsb_entry.key);
-
-                std.mem.writeInt(u32, &buf4, bsb_entry.offset, .little);
-                try file.writeAll(&buf4);
-
-                buf1[0] = if (bsb_entry.value) 1 else 0;
-                try file.writeAll(&buf1);
+            .BitmapSetBit => |bsb| {
+                std.mem.writeInt(u32, &tmp4, bsb.key_len, .little);
+                try w.writeAll(&tmp4);
+                try w.writeAll(bsb.key);
+                std.mem.writeInt(u32, &tmp4, bsb.offset, .little);
+                try w.writeAll(&tmp4);
+                try w.writeByte(if (bsb.value) 1 else 0);
             },
-            .BitFeildSet => |bsf_entry| {
-                std.mem.writeInt(u32, &buf4, bsf_entry.key_len, .little);
-                try file.writeAll(&buf4);
-                try file.writeAll(bsf_entry.key);
-
-                std.mem.writeInt(u32, &buf4, bsf_entry.offset_bytes, .little);
-                try file.writeAll(&buf4);
-                std.mem.writeInt(u32, &buf4, bsf_entry.value_len_bytes, .little);
-                try file.writeAll(&buf4);
-                try file.writeAll(bsf_entry.value_bytes);
+            .BitFeildSet => |bf| {
+                std.mem.writeInt(u32, &tmp4, bf.key_len, .little);
+                try w.writeAll(&tmp4);
+                try w.writeAll(bf.key);
+                std.mem.writeInt(u32, &tmp4, bf.offset_bytes, .little);
+                try w.writeAll(&tmp4);
+                std.mem.writeInt(u32, &tmp4, bf.value_len_bytes, .little);
+                try w.writeAll(&tmp4);
+                try w.writeAll(bf.value_bytes);
             },
         }
+
+        try file.writeAll(buf.items);
     }
 
     pub fn deserialize(file: std.fs.File, allocator: std.mem.Allocator) !LogEntry {
@@ -152,6 +149,7 @@ pub const LogEntry = union(OperationType) {
 
         var buf4: [4]u8 = undefined;
         var buf1: [1]u8 = undefined;
+        var buf8: [8]u8 = undefined;
 
         switch (op) {
             .Set => {
@@ -176,7 +174,6 @@ pub const LogEntry = union(OperationType) {
                 if (try file.readAll(&has_expiry_byte) < 1) return error.EndOfStream;
                 var expiry_unix_s: ?u64 = null;
                 if (has_expiry_byte[0] == 1) {
-                    var buf8: [8]u8 = undefined;
                     if (try file.readAll(&buf8) < 1) return error.EndOfStream;
                     expiry_unix_s = std.mem.readInt(u64, &buf8, .little);
                 }
