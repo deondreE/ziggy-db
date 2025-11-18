@@ -1,5 +1,9 @@
 const std = @import("std");
 const root = @import("root.zig");
+const tls = std.crypto.tls;
+
+pub const GOSSIP_PORT: u16 = 9333;
+pub const CLUSTER_DEFAULT_PORT: u16 = 6001;
 
 pub const NodeRole = enum {
     Leader,
@@ -45,6 +49,7 @@ pub const PersistentState = struct {
     }
 };
 
+/// RPC request and response.
 pub const AppendEntriesReq = struct {
     term: u64,
     leader_id: []const u8,
@@ -61,30 +66,21 @@ pub const AppendEntriesResp = struct {
     follower_id: []const u8,
 };
 
-pub const SnapshotHeader = struct {
-    term: u64,
-    last_included_index: u64,
-    last_included_term: u64,
-    size: u64,
-};
-
 pub const ClusterState = struct {
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
+
     peers: std.StringHashMap(NodeInfo),
     self_node: NodeInfo,
+
     role: NodeRole = .Follower,
     term: u64 = 0,
     voted_for: ?[]const u8 = null,
     commit_index: u64 = 0,
     last_applied: u64 = 0,
     leader_id: ?[]const u8 = null,
-    volatile_leader_commit: u64 = 0,
-    next_index: std.StringHashMap(u64),
-    match_index: std.StringHashMap(u64),
-    cluster_meta: PersistentState,
 
-    log_dir: std.fs.Dir,
+    cluster_meta: PersistentState,
 
     pub fn init(allocator: std.mem.Allocator, base_dur: []const u8, self_addr: []const u8) !ClusterState {
         var cwd = std.fs.cwd();
@@ -98,7 +94,6 @@ pub const ClusterState = struct {
         return ClusterState{
             .allocator = allocator,
             .dir = cluster_dir,
-            .log_dir = cluster_dir,
             .peers = std.StringHashMap(NodeInfo).init(allocator),
             .self_node = NodeInfo{
                 .id = id,
@@ -111,18 +106,62 @@ pub const ClusterState = struct {
             .commit_index = meta.commit_index,
             .last_applied = meta.last_applied,
             .cluster_meta = meta,
-            .next_index = std.StringHashMap(u64).init(allocator),
-            .match_index = std.StrignHashMap(u64).init(allocator),
         };
     }
 
     pub fn deinit(self: *ClusterState) void {
         self.peers.deinit();
-        self.next_index.deinit();
-        self.match_index.deinit();
         self.allocator.free(self.self_node.id);
         self.allocator.free(self.self_node.addr);
         self.dir.close();
+    }
+
+    /// Add peer manually.
+    pub fn addPeer(self: *ClusterState, addr: []const u8) !void {
+        if (std.mem.eql(u8, addr, self.self_node.addr)) return;
+        const addr_copy = try self.allocator.dupe(u8, addr);
+
+        var id_buf: [16]u8 = undefined;
+        try std.crypto.random(&id_buf);
+        const id = try std.fmt.allocPrint(self.allocator, "{x:0>32}", .{id_buf});
+
+        try self.peers.put(addr_copy, NodeInfo{
+            .id = id,
+            .addr = addr_copy,
+            .last_heartbeat = 0,
+            .online = false,
+        });
+    }
+
+    /// Try load peers from config file; fallback to gossip outdated.
+    pub fn discover(self: *ClusterState, path: []const u8) !void {
+        if (std.fs.cwd().access(path, .{}) catch |err| err == error.FileNotFound) {
+            std.debug.print("[CLUSTER] Config file not found - using gossip autodiscovery...");
+            _ = std.Thread.spawn(.{}, startGossipDiscovery, .{self}) catch |err| {
+                std.debug.print("[GOSSIP] Failed to spawn discovery thread: {any}\n", .{err});
+            };
+            return;
+        }
+
+        var file = try std.fs.cwd().openFile(path, .{});
+        defer file.close();
+
+        var buf: [256]u8 = undefined;
+        while (try file.readAll(&buf)) |line| {
+            const trimmed = std.mem.trim(&buf, line, "\r\t");
+            if (trimmed.len == 0 or trimmed[0] == '#') continue;
+            if (std.mem.startsWith(u8, trimmed, "peer")) {
+                const addr = std.mem.trim(u8, trimmed[4..], " =");
+                try self.addPeer(addr);
+            }
+        }
+
+        std.debug.print("[CLUSTER] Config discovery complete ({d} peers)", .{self.peers.count()});
+    }
+
+    /// Gossip discovery (runs in background)
+    fn startGossipDiscovery(self: *ClusterState) !void {
+        _ = self;
     }
 
     /// Load a cluster configuration from a file.
@@ -159,24 +198,6 @@ pub const ClusterState = struct {
         }
 
         return cluster;
-    }
-
-    /// Adds a new peer to the cluster.
-    pub fn addPeer(self: *ClusterState, peer: []const u8) !void {
-        const key = try self.allocator.dupe(u8, peer);
-
-        var id_buf: [16]u8 = undefined;
-        try std.crypto.random(&id_buf);
-        const id = try std.fmt.allocPrint(self.allocator, "{x:0>32}", .{id_buf});
-
-        try self.peers.put(key, NodeInfo{
-            .id = id,
-            .addr = key,
-            .online = false,
-            .last_heartbeat = 0,
-        });
-        try self.next_index.put(id, 1);
-        try self.match_index.put(id, 0);
     }
 
     fn runElection(self: *ClusterState) !void {

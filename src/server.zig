@@ -58,6 +58,7 @@ const ClusterConnectionHandler = struct {
     }
 };
 
+// FIXME: Cluster stuff & things.
 pub fn startTcpServer(db: root.Database, port: u16, allocator: std.mem.Allocator) !void {
     const address = try std.net.Address.parseIp("0.0.0.0", port);
     var listener = address.listen(.{ .reuse_address = true }) catch |err| {
