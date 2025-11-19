@@ -8,18 +8,26 @@ pub enum DbError {
     CreationFailed,
     OperationFailed,
     Utf8Error,
+    BufferTooSmall,
+    InvalidArgument,
+    FfiError(String),
 }
 
 impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DbError::CreationFailed => write!(f, "Database creation failed"),
-            DbError::OperationFailed => write!(f, "Database operation failed"),    
+            DbError::OperationFailed => write!(f, "Database operation failed"),
             DbError::Utf8Error => write!(f, "Invalid UTF-8"),
+            DbError::BufferTooSmall => {
+                write!(f, "Provided buffer was too small to retrieve data")
+            }
+            DbError::InvalidArgument => write!(f, "Invalid argument passed to FFI function"),
+            DbError::FfiError(msg) => write!(f, "FFI error: {}", msg),
         }
     }
-}   
-impl std::error::Error for DbError{}
+}
+impl std::error::Error for DbError {}
 
 pub struct Database {
     handle: *mut ffi::DatabaseHandle,
@@ -38,7 +46,7 @@ impl Database {
             }
         }
     }
-    
+
     /// Insert or update key/value pair.
     pub fn set(&self, key: &str, val: &str) -> Result<(), DbError> {
         unsafe {
@@ -52,27 +60,41 @@ impl Database {
             }
         }
     }
-    
+
     /// Retrieve a value as a string.
     pub fn get(&self, key: &str) -> Result<Option<String>, DbError> {
         unsafe {
             let k = key.as_bytes();
-            let mut buf = vec![0u8, 255];
-            let n = ffi::db_get(self.handle, k.as_ptr(), k.len(), buf.as_mut_ptr(), buf.len());
-            if n == 0 {
-                return Ok(None);
-            }
-            let bytes = &buf[..n];
-            match String::from_utf8(bytes.to_vec()) {
-                Ok(s) => Ok(Some(s)),
-                Err(_) => Err(DbError::Utf8Error),
+            let mut buf_size = 256;
+            let mut buf = Vec::with_capacity(buf_size);
+            buf.set_len(buf_size);
+
+            loop {
+                // n:
+                // >0: bytes written to buf
+                // 0: key not found
+                // -1: generic error
+                // -2: buffer too small
+                let n = ffi::db_get(
+                    self.handle,
+                    k.as_ptr(),
+                    k.len(),
+                    buf.as_mut_ptr(),
+                    buf.len(),
+                );
+
+                if n == 0 {
+                    return Ok(None);
+                } else if n == -1 {
+                    return Err(Self::get_ffi_error(DbError::OperationFailed));
+                }
             }
         }
     }
 }
 
 impl Drop for Database {
-    fn drop (&mut self) {
+    fn drop(&mut self) {
         unsafe {
             if !self.handle.is_null() {
                 ffi::db_close(self.handle);

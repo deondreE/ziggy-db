@@ -80,7 +80,22 @@ pub fn startTcpServer(db: *root.Database, port: u16, allocator: std.mem.Allocato
 
         std.debug.print("accepting new connection.\n", .{});
 
-        handleClient(conn.stream, db, allocator);
+        const thread_db_ptr = db;
+        const thread_allocator = allocator;
+        const client_stream_to_move = conn.stream;
+
+        _ = std.Thread.spawn(.{}, struct {
+            fn run(
+                moved_client_stream: std.net.Stream,
+                db_ptr: *root.Database,
+                current_allocator: std.mem.Allocator,
+            ) void {
+                handleClient(moved_client_stream, db_ptr, current_allocator);
+            }
+        }.run, .{ client_stream_to_move, thread_db_ptr, thread_allocator }) catch |err| {
+            std.debug.print("ERORR: failed to spin new process. {any} \n", .{@errorName(err)});
+            client_stream_to_move.close();
+        };
 
         std.debug.print("Client connection handled and closed\n", .{});
     }
@@ -105,44 +120,55 @@ fn handleClient(
     var reader = stream_ptr.reader(&reader_buf);
     var writer = stream_ptr.writer(&writer_buf).interface;
 
-    while (true) {
-        line_buf.clearRetainingCapacity();
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+    const MAX_COMMAND_LENGTH = 1024;
 
-        _ = reader.interface_state.streamDelimiter(&writer, '\n') catch |err| switch (err) {
-            error.EndOfStream => {
-                std.debug.print("handleClient: Client disconneced gracefully.{s}\n", .{@errorName(err)});
-                break;
-            },
+    writer.writeAll("Welcome to ZiggyDB!\n") catch |err| {
+        std.debug.print("handleClient for {any}: Error writing greeting: {s}\n", .{ "", @errorName(err) });
+    };
+    writer.flush() catch |err| {
+        std.debug.print("handleClient for {any}: Error flushing greeting: {s}\n", .{ "", @errorName(err) });
+    };
+
+    var recived_data: [MAX_COMMAND_LENGTH]u8 = undefined;
+    while (true) {
+        _ = reader.net_stream.read(recived_data[0..]) catch |err| switch (err) {
             else => {
                 std.debug.print("handleClient: Read error in loop: {s}\n", .{@errorName(err)});
                 return;
             },
         };
+        const bytes_read = recived_data.len;
+        if (bytes_read == 0) {
+            std.debug.print("DEBUG: Zig server read 0 bytes. Client likely disconnected.\n", .{});
+            break;
+        }
 
-        const cmd_line = std.mem.trim(u8, line_buf.items, " \r\t");
-        root.fuzzAssert(cmd_line.len < 1024, "Cmd too large");
+        std.debug.print("DEBUG: Zig server read {} bytes. Raw content: {any}\n", .{ bytes_read, recived_data });
+
+        const command_slice = recived_data[0..bytes_read];
+        const cmd_line = std.mem.trim(u8, command_slice, " \r\n\t");
+        std.debug.print("handleclient: received command: '{s}'\n", .{cmd_line});
+        root.fuzzAssert(cmd_line.len < 1024, "cmd too large");
         if (cmd_line.len == 0 or std.ascii.eqlIgnoreCase(cmd_line, "exit")) break;
 
         const res = executeCommand(db, allocator, cmd_line) catch |err| blk: {
+            std.debug.print("handleClient: Error executing command '{s}': '{s}'\n", .{ cmd_line, @errorName(err) });
             const msg = @errorName(err);
             root.fuzzAssert(msg.len > 0, "Error message should not be empty");
             break :blk CommandResult{ .msg = msg, .owns = true };
         };
 
-        std.Thread.sleep(1 * std.time.ns_per_ms);
-
         _ = writer.writeAll(res.msg) catch |err| {
             std.debug.print("handleClient: Result write error: {s}\n", .{@errorName(err)});
             if (res.owns) allocator.free(res.msg);
+            break;
         };
-
-        std.Thread.sleep(1 * std.time.ns_per_ms);
 
         _ = writer.flush() catch |err| {
             std.debug.print("handleClient: Result flush error: {s}\n", .{@errorName(err)});
             break;
         };
+        if (res.owns) allocator.free(res.msg);
     }
 }
 
@@ -176,6 +202,7 @@ fn executeCommand(
             const key = toks.next() orelse return .{ .msg = "ERR missing key\n" };
             const val = toks.next() orelse return .{ .msg = "ERR missing value\n" };
             try db.setString(key, val);
+            std.debug.print("executeCommand: SET successful\n", .{});
             return .{ .msg = "OK\n" };
         },
         .del => {
