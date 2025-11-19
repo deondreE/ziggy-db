@@ -147,3 +147,24 @@ That’s a game-changer for engineers — gives visibility and control without l
 - Extended keywords: AS OF, VERSION, LINEAGE, TOLERANCE, PROJECT
 - Everything is consistent and composable, no ad-hoc JSON sugar
 - Query engine understands temporal and structural dimensions natively
+
+## Batch Query
+
+```
+BATCH active_users AS (
+  SELECT id FROM users WHERE status = 'active'
+);
+
+BATCH recent_orders AS (
+  SELECT user_id, COUNT(*) AS order_count
+  FROM orders BETWEEN '2025-10-01' AND '2025-10-31'
+  GROUP BY user_id
+);
+
+SELECT
+  a.id,
+  r.order_count
+FROM active_users a
+JOIN recent_orders r ON a.id = r.user_id
+WHERE r.order_count > 3;
+```

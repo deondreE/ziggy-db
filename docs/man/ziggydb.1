@@ -1,4 +1,6 @@
-.\" Manpage for ziggydb
+.\" ============================================================================
+.\" ZiggyDB(1) - User Manual
+.\" ============================================================================
 .TH ZIGGYDB 1 "November 2025" "ZiggyDB v1.0.0" "User Commands"
 .SH NAME
 ziggydb \- interactive key-value database shell written in Zig
@@ -11,17 +13,29 @@ Launches an interactive shell to run database commands.
 
 .SH DESCRIPTION
 ZiggyDB is a lightweight, durable key-value data store based on a 
-Write-Ahead Log. It supports string, integer, float, boolean, 
-binary, and bitmap values, lists, bitfields, and transactions.
+Write-Ahead Log (WAL). It supports multiple data structures:
 
-The shell can import/export JSON data and run as a TCP server.
+.TP
+• Strings, integers, floats, booleans, binary values
+.br
+• Lists (with LPUSH/LPOP/LRANGE)
+.br
+• Bitmaps and Bitfields
+.br
+• Transactions
+.br
+• Sets and Sorted Sets
+
+The shell can import/export JSON data and act as a TCP server interface.
 
 .SH COMMANDS
 Available commands in the shell:
 
 .TP
 .B SET key value [EXP seconds] [TYPE type]
-Store a key-value pair. Optionally set expiry and type.
+Store a key-value pair. Optionally define expiry and type.
+.br
+Types: STRING, INT, FLOAT, BOOL, BINARY, TIMESTAMP, BITMAP, BITFEILD.
 
 .TP
 .B GET key
@@ -58,16 +72,44 @@ Get the bit value at offset.
 Manipulate arbitrary bitfields.
 
 .TP
+.B SADD key member [member ...]
+Add one or more members to a Set. Members are unique.
+
+.TP
+.B SREM key member [member ...]
+Remove members from a Set.
+
+.TP
+.B SMEMBERS key
+List all members of a Set.
+
+.TP
+.B ZADD key member score
+Add or update a member with its numeric score in a Sorted Set.
+
+.TP
+.B ZREM key member [member ...]
+Remove one or more members from a Sorted Set.
+
+.TP
+.B ZRANGE key start stop
+Return members and scores within the specified range (by index, ascending by score).
+
+.TP
+.B ZSCORE key member
+Return the score of a specific member in a Sorted Set.
+
+.TP
 .B BEGIN
-Start a transaction.
+Start a transaction. All changes are buffered until COMMIT.
 
 .TP
 .B COMMIT
-Commit the current transaction.
+Commit the current transaction to the database.
 
 .TP
 .B ROLLBACK
-Cancel all changes in the current transaction.
+Abort all pending changes in the current transaction.
 
 .TP
 .B IMPORTJSON <string>
@@ -75,7 +117,9 @@ Import JSON data into the database.
 
 .TP
 .B EXPORTJSON
-Export current state to data.json file.
+Export current state to
+.I data.json
+in the working directory.
 
 .TP
 .B SERVE [port]
@@ -104,12 +148,37 @@ Overrides the WAL log file path.
 $ ziggydb
 ziggy> SET name "Deondre"
 OK
+ziggy> SET counter 42 EXP 60 TYPE INT
+OK
+ziggy> LPUSH colors red green blue
+(3) pushed
+ziggy> LRANGE colors 0 2
+1) blue
+2) green
+3) red
+ziggy> SADD languages zig rust c
+3 member(s) added
+ziggy> SMEMBERS languages
+1) c
+2) rust
+3) zig
+ziggy> ZADD scores alice 90.5
+Added alice (score 90.50)
+ziggy> ZADD scores bob 82
+Added bob (score 82.00)
+ziggy> ZRANGE scores 0 10
+1) bob 82.00
+2) alice 90.50
+ziggy> ZSCORE scores alice
+90.50
 ziggy> EXPORTJSON
 ziggy> EXIT
 $ cat data.json
 {
   "map": { "name": { "value": "Deondre", "expiry_unix_s": null } },
-  "lists": {}
+  "lists": { "colors": ["blue", "green", "red"] },
+  "sets": { "languages": ["c", "rust", "zig"] },
+  "zsets": { "scores": {"bob":82.0,"alice":90.5} }
 }
 .fi
 
@@ -117,7 +186,9 @@ $ cat data.json
 Written by Deondre English.
 
 .SH REPORTING BUGS
-Submit issues at https://github.com/deondreenglish/ziggydb
+Submit issues at:
+.UR https://github.com/deondreenglish/ziggydb
+.UE
 
 .SH SEE ALSO
 .BR zig (1),

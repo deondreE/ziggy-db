@@ -32,6 +32,12 @@ pub const Command = enum {
     serve,
     importjson,
     exportjson,
+    sadd,
+    srem,
+    zrange,
+    zscore,
+    zadd,
+    zrem,
     cls,
     exit,
     unknown,
@@ -53,6 +59,13 @@ pub fn parseCommand(tok: []const u8) Command {
     if (std.ascii.eqlIgnoreCase(tok, "ROLLBACK")) return .rollback;
     if (std.ascii.eqlIgnoreCase(tok, "IMPORTJSON")) return .importjson;
     if (std.ascii.eqlIgnoreCase(tok, "EXPORTJSON")) return .exportjson;
+    if (std.ascii.eqlIgnoreCase(tok, "SADD")) return .sadd;
+    if (std.ascii.eqlIgnoreCase(tok, "SREM")) return .srem;
+    if (std.ascii.eqlIgnoreCase(tok, "SMEMBERS")) return .smembers;
+    if (std.ascii.eqlIgnoreCase(tok, "ZADD")) return .zadd;
+    if (std.ascii.eqlIgnoreCase(tok, "ZREM")) return .zrem;
+    if (std.ascii.eqlIgnoreCase(tok, "ZRANGE")) return .zrange;
+    if (std.ascii.eqlIgnoreCase(tok, "ZSCORE")) return .zscore;
     if (std.ascii.eqlIgnoreCase(tok, "SERVE")) return .serve;
     if (std.ascii.eqlIgnoreCase(tok, "CLS")) return .cls;
     if (std.ascii.eqlIgnoreCase(tok, "EXIT") or std.ascii.eqlIgnoreCase(tok, "QUIT"))

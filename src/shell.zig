@@ -88,6 +88,13 @@ pub fn main() !void {
                     \\  IMPORTJSON <json_string>
                     \\  EXPORTJSON 
                     \\  BEGIN / COMMIT / ROLLBACK
+                    \\  SADD key member [member ...]
+                    \\  SREM key member [member ...]
+                    \\  SMEMBERS key
+                    \\  ZADD key member score
+                    \\  ZREM key member [member ...]
+                    \\  ZRANGE key start stop
+                    \\  ZSCORE key member
                     \\  CLS
                     \\  HELP / EXIT
                     \\-------------------------------------------
@@ -459,6 +466,95 @@ pub fn main() !void {
                 };
 
                 try stdout.print("JSON export complete!\n", .{});
+            },
+            .sadd => {
+                const key = toks.next() orelse {
+                    try stdout.print("Missing key\n", .{});
+                    continue :shell_loop;
+                };
+                var added: usize = 0;
+                while (toks.next()) |member| {
+                    if (try db.sadd(key, member))
+                        added += 1;
+                }
+                try stdout.print("{d} member(s) added\n", .{added});
+            },
+            .srem => {
+                const key = toks.next() orelse {
+                    try stdout.print("Missing key\n", .{});
+                    continue :shell_loop;
+                };
+                var removed: usize = 0;
+                while (toks.next()) |member| {
+                    if (db.srem(key, member))
+                        removed += 1;
+                }
+                try stdout.print("{d} member(s) removed\n", .{removed});
+            },
+            .smemebers => {
+                const key = toks.next() orelse {
+                    try stdout.print("Missing key\n", .{});
+                    continue :shell_loop;
+                };
+                const members = try db.smembers(key, alloc);
+                defer alloc.free(members);
+                if (members.len == 0) {
+                    try stdout.print("(empty set)\n", .{});
+                } else {
+                    for (members, 0..) |m, i| {
+                        try stdout.print("{d}) {s}\n", .{ i + 1, m });
+                    }
+                }
+            },
+            .zadd => {
+                const key = toks.next() orelse {
+                    try stdout.print("Missing key\n", .{});
+                    continue :shell_loop;
+                };
+                const member = toks.next() orelse {
+                    try stdout.print("Missing member\n", .{});
+                    continue :shell_loop;
+                };
+                const score_str = toks.next() orelse {
+                    try stdout.print("Missing score\n", .{});
+                    continue :shell_loop;
+                };
+                const score = std.fmt.parseFloat(f64, score_str) catch {
+                    try stdout.print("Invalid score\n", .{});
+                    continue :shell_loop;
+                };
+                const added = try db.zadd(key, member, score);
+                if (added) try stdout.print("Added {s} (score {d:.2})\n", .{ member, score }) else try stdout.print("Updated {s} (score {d:.2})\n", .{ member, score });
+            },
+            .srem => {
+                const key = toks.next() orelse {
+                    try stdout.print("Missing key\n", .{});
+                    continue :shell_loop;
+                };
+                var removed: usize = 0;
+                while (toks.next()) |member| {
+                    if (db.zrem(key, member))
+                        removed += 1;
+                }
+                try stdout.print("{d} member(s) removed\n", .{removed});
+            },
+            .zscore => {
+                const key = toks.next() orelse {
+                    try stdout.print("Missing key\n", .{});
+                    continue :shell_loop;
+                };
+                const start_str = toks.next() orelse "0";
+                const stop_str = toks.next() orelse "10";
+                const start = std.fmt.parseInt(usize, start_str, 10) catch 0;
+                const stop = std.fmt.parseInt(usize, stop_str, 10) catch 10;
+                const items = try db.zrange(key, start, stop, alloc);
+                defer alloc.free(items);
+                if (items.len == 0)
+                    try stdout.print("(empty zset)\n", .{})
+                else for (items, 0..) |m, i| {
+                    const score = db.zscore(key, m).?;
+                    try stdout.print("{d}) {s} {d:.2}\n", .{ i + 1, m, score });
+                }
             },
             .exit => {
                 try stdout.print("Goodbye!\n", .{});

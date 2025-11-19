@@ -7,6 +7,10 @@ const OperationType = enum(u8) {
     ListPop,
     BitmapSetBit,
     BitFeildSet,
+    SetAdd,
+    SetRemove,
+    ZAdd,
+    ZRemove,
 };
 
 pub const ValueType = enum(u8) {
@@ -69,6 +73,31 @@ pub const LogEntry = union(OperationType) {
         offset_bytes: u32,
         value_len_bytes: u32,
         value_bytes: []const u8,
+    },
+    SetAdd: struct {
+        key_len: u32,
+        key: []const u8,
+        member_len: u32,
+        member: []const u8,
+    },
+    SetRemove: struct {
+        key_len: u32,
+        key: []const u8,
+        member_len: u32,
+        member: []const u8,
+    },
+    ZAdd: struct {
+        key_len: u32,
+        key: []const u8,
+        member_len: u32,
+        member: []const u8,
+        score: f64,
+    },
+    ZRemove: struct {
+        key_len: u32,
+        key: []const u8,
+        member_len: u32,
+        member: []const u8,
     },
 
     pub fn serialize(self: LogEntry, file: std.fs.File) !void {
@@ -136,6 +165,40 @@ pub const LogEntry = union(OperationType) {
                 try w.writeAll(&tmp4);
                 try w.writeAll(bf.value_bytes);
             },
+            .SetAdd => |s| {
+                std.mem.writeInt(u32, &tmp4, s.key_len, .little);
+                try file.writeAll(&tmp4);
+                try file.writeAll(s.key);
+                std.mem.writeInt(u32, &tmp4, s.member_len, .little);
+                try file.writeAll(&tmp4);
+                try file.writeAll(s.member);
+            },
+            .SetRemove => |s| {
+                std.mem.writeInt(u32, &tmp4, s.key_len, .little);
+                try file.writeAll(&tmp4);
+                try file.writeAll(s.key);
+                std.mem.writeInt(u32, &tmp4, s.member_len, .little);
+                try file.writeAll(&tmp4);
+                try file.writeAll(s.member);
+            },
+            .ZAdd => |z| {
+                std.mem.writeInt(u32, &tmp4, z.key_len, .little);
+                try file.writeAll(&tmp4);
+                try file.writeAll(z.key);
+                std.mem.writeInt(u32, &tmp4, z.member_len, .little);
+                try file.writeAll(&tmp4);
+                try file.writeAll(z.member);
+                std.mem.writeInt(u64, &tmp8, @intFromFloat(z.score), .little);
+                try file.writeAll(&tmp8);
+            },
+            .ZRemove => |z| {
+                std.mem.writeInt(u32, &tmp4, z.key_len, .little);
+                try file.writeAll(&tmp4);
+                try file.writeAll(z.key);
+                std.mem.writeInt(u32, &tmp4, z.member_len, .little);
+                try file.writeAll(&tmp4);
+                try file.writeAll(z.member);
+            },
         }
 
         try file.writeAll(buf.items);
@@ -188,6 +251,70 @@ pub const LogEntry = union(OperationType) {
                         .expiry_unix_s = expiry_unix_s,
                     },
                 };
+            },
+            .SetAdd, .SetRemove => {
+                _ = try file.readAll(&buf4);
+                const key_len = std.mem.readInt(u32, &buf4, .little);
+                const key = try allocator.alloc(u8, key_len);
+                if (try file.readAll(key) < key_len) return error.EndOfStream;
+                _ = try file.readAll(&buf4);
+                const member_len = std.mem.readInt(u32, &buf4, .little);
+                const member = try allocator.alloc(u8, member_len);
+                if (try file.readAll(member) < member_len) return error.EndOfStream;
+
+                if (op == .SetAdd) {
+                    return LogEntry{ .SetAdd = .{
+                        .key_len = key_len,
+                        .key = key,
+                        .member_len = member_len,
+                        .member = member,
+                    } };
+                } else {
+                    return LogEntry{ .SetRemove = .{
+                        .key_len = key_len,
+                        .key = key,
+                        .member_len = member_len,
+                        .member = member,
+                    } };
+                }
+            },
+            .ZAdd => {
+                _ = try file.readAll(&buf4);
+                const key_len = std.mem.readInt(u32, &buf4, .little);
+                const key = try allocator.alloc(u8, key_len);
+                if (try file.readAll(key) < key_len) return error.EndOfStream;
+                _ = try file.readAll(&buf4);
+                const member_len = std.mem.readInt(u32, &buf4, .little);
+                const member = try allocator.alloc(u8, member_len);
+                if (try file.readAll(member) < member_len) return error.EndOfStream;
+                _ = try file.readAll(&buf8);
+                const score = std.mem.readInt(u32, &buf4, .little);
+                _ = score;
+                // FIXME: Score
+                return LogEntry{ .ZAdd = .{
+                    .key_len = key_len,
+                    .key = key,
+                    .member_len = member_len,
+                    .member = member,
+                    .score = 0,
+                } };
+            },
+            .ZRemove => {
+                _ = try file.readAll(&buf4);
+                const key_len = std.mem.readInt(u32, &buf4, .little);
+                const key = try allocator.alloc(u8, key_len);
+                if (try file.readAll(key) < key_len) return error.EndOfStream;
+                _ = try file.readAll(&buf4);
+                const member_len = std.mem.readInt(u32, &buf4, .little);
+                const member = try allocator.alloc(u8, member_len);
+                if (try file.readAll(member) < member_len) return error.EndOfStream;
+
+                return LogEntry{ .ZRemove = .{
+                    .key_len = key_len,
+                    .key = key,
+                    .member_len = member_len,
+                    .member = member,
+                } };
             },
             .Delete => {
                 _ = try file.readAll(&buf4);
@@ -499,6 +626,74 @@ pub const LogEntry = union(OperationType) {
                     }
                 }
                 std.debug.print("{s}│{s}{s}\n", .{ RESET, DIM, RESET });
+            },
+            .SetAdd => |sa| {
+                std.debug.print(
+                    "{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} {s}+{s}{s:21}{s} │{s}\n",
+                    .{
+                        DIM,    RESET,
+                        GREEN,  "SADD",
+                        RESET,  DIM,
+                        RESET,  CYAN,
+                        sa.key, RESET,
+                        DIM,    RESET,
+                        BLUE,   sa.member,
+                        RESET,  DIM,
+                        RESET,
+                    },
+                );
+            },
+            .SetRemove => |sr| {
+                std.debug.print(
+                    "{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} {s}{s:21}{s}  {s}│{s}\n",
+                    .{
+                        DIM,    RESET,
+                        RED,    "SREM",
+                        RESET,  DIM,
+                        RESET,  CYAN,
+                        sr.key, RESET,
+                        DIM,    RESET,
+                        BLUE,   sr.member,
+                        RESET,  DIM,
+                        RESET,
+                    },
+                );
+            },
+            .ZAdd => |za| {
+                var buf: [32]u8 = undefined;
+                const score_str = std.fmt.bufPrint(&buf, "{d:.2}", .{za.score}) catch "ERR";
+
+                std.debug.print(
+                    "{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} m={s}{s}{s} s={s}{s}{s} {s}│{s}\n",
+                    .{
+                        DIM,       RESET,
+                        GREEN,     "ZADD",
+                        RESET,     DIM,
+                        RESET,     CYAN,
+                        za.key,    RESET,
+                        DIM,       RESET,
+                        BLUE,      za.member,
+                        RESET,     YELLOW,
+                        score_str, RESET,
+                        DIM,       RESET,
+                    },
+                );
+            },
+            .ZRemove => |zr| {
+                std.debug.print(
+                    "{s}│{s} {s}{s:9}{s} {s}│{s} {s}{s:13}{s} {s}│{s} member={s}{s}{s} {s}│{s}\n",
+                    .{
+                        DIM,    RESET,
+                        RED,    "ZREM",
+                        RESET,  DIM,
+                        RESET,  CYAN,
+                        zr.key, RESET,
+                        DIM,    RESET,
+                        BLUE,   zr.member,
+                        RESET,  DIM,
+                        RESET,
+                    },
+                );
             },
         }
 

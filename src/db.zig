@@ -15,6 +15,9 @@ pub const ValueWithMetadata = struct {
 pub const Database = struct {
     map: std.StringHashMap(ValueWithMetadata),
     lists: std.StringHashMap(std.array_list.Managed([]const u8)),
+    sets: std.StringHashMap(std.StringHashMap(void)),
+    zsets: std.StringHashMap(std.StringHashMap(f64)),
+
     allocator: std.mem.Allocator,
     log_file: std.fs.File,
     file_path: []const u8,
@@ -73,6 +76,8 @@ pub const Database = struct {
         var db = Database{
             .map = std.StringHashMap(ValueWithMetadata).init(allocator),
             .lists = std.StringHashMap(std.array_list.Managed([]const u8)).init(allocator),
+            .sets = std.StringHashMap(std.StringHashMap(void)).init(allocator),
+            .zsets = std.StringHashMap(std.StringHashMap(f64)).init(allocator),
             .allocator = allocator,
             .log_file = log_file,
             .file_path = try allocator.dupe(u8, conn_str.file_path),
@@ -249,6 +254,48 @@ pub const Database = struct {
                         db.allocator.free(bfs_entry.key);
                         db.allocator.free(bfs_entry.value_bytes);
                     },
+                    .SetAdd => |sadd_entry| {
+                        const key_str = try allocator.dupe(u8, sadd_entry.key);
+                        const mem_str = try allocator.dupe(u8, sadd_entry.member);
+                        const current = db.sets.getPtr(key_str) orelse blk: {
+                            const ns = std.StringHashMap(void).init(allocator);
+                            try db.sets.put(try allocator.dupe(u8, sadd_entry.key), ns);
+                            break :blk db.sets.getPtr(key_str).?;
+                        };
+                        try current.put(mem_str, {});
+                        allocator.free(sadd_entry.key);
+                        allocator.free(sadd_entry.member);
+                    },
+                    .SetRemove => |srem_entry| {
+                        if (db.sets.getPtr(srem_entry.key)) |sr| {
+                            if (sr.fetchRemove(srem_entry.member)) |r| {
+                                db.allocator.free(r.key);
+                            }
+                        }
+                        db.allocator.free(srem_entry.key);
+                        db.allocator.free(srem_entry.member);
+                    },
+                    .ZAdd => |zadd_entry| {
+                        const key_str = try allocator.dupe(u8, zadd_entry.key);
+                        const mem_str = try allocator.dupe(u8, zadd_entry.member);
+                        var zset = db.zsets.getPtr(key_str) orelse blk: {
+                            const nz = std.StringHashMap(f64).init(allocator);
+                            try db.zsets.put(try allocator.dupe(u8, zadd_entry.key), nz);
+                            break :blk db.zsets.getPtr(key_str).?;
+                        };
+                        _ = try zset.put(mem_str, zadd_entry.score);
+                        allocator.free(zadd_entry.key);
+                        allocator.free(zadd_entry.member);
+                    },
+                    .ZRemove => |zrem_entry| {
+                        if (db.zsets.getPtr(zrem_entry.key)) |z| {
+                            if (z.fetchRemove(zrem_entry.member)) |r| {
+                                db.allocator.free(r.key);
+                            }
+                        }
+                        db.allocator.free(zrem_entry.key);
+                        db.allocator.free(zrem_entry.member);
+                    },
                 }
             } else if (file_size > 0) {
                 std.debug.print("Warning: File too small to contain valid WAL header\n", .{});
@@ -272,6 +319,7 @@ pub const Database = struct {
             tx.deinit();
         }
 
+        // lists
         var lit = self.lists.iterator();
         while (lit.next()) |entry| {
             var arr = entry.value_ptr.*;
@@ -283,6 +331,28 @@ pub const Database = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.lists.deinit();
+
+        // sets
+        var sit = self.sets.iterator();
+        while (sit.next()) |entry| {
+            var s = entry.value_ptr.*;
+            var m_it = s.keyIterator();
+            while (m_it.next()) |m| self.allocator.free(m.*);
+            s.deinit();
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.sets.deinit();
+
+        // zsets
+        var zit = self.zsets.iterator();
+        while (zit.next()) |entry| {
+            var z = entry.value_ptr.*;
+            var m_it = z.keyIterator();
+            while (m_it.next()) |m| self.allocator.free(m.*);
+            z.deinit();
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.zsets.deinit();
 
         var it = self.map.iterator();
         while (it.next()) |entry| {
@@ -921,7 +991,66 @@ pub const Database = struct {
                             }
                         },
                         .object => {
-                            std.debug.print("Warning: Nested JSON object for key '{s}' not supported, skipping.\n", .{key});
+                            // var sit = obj_map.iterator();
+                            // while (sit.next()) |entry| {
+                            //     const key = entry.key_ptr.*;
+                            //     const val = entry.value_ptr.*;
+
+                            //     // Existing handling of "map" and "lists" remains unchanged.
+
+                            //     if (std.ascii.eqlIgnoreCase(key, "sets")) {
+                            //         // sets: { "key": ["member1","member2"] }
+                            //         switch (val.*) {
+                            //             .object => |set_map| {
+                            //                 var sit = set_map.iterator();
+                            //                 while (sit.next()) |sentry| {
+                            //                     const set_key = sentry.key_ptr.*;
+                            //                     switch (sentry.value_ptr.*) {
+                            //                         .array => |marr| {
+                            //                             for (marr.items) |js| switch (js) {
+                            //                                 .string => |memb| {
+                            //                                     _ = self.sadd(set_key, memb) catch {};
+                            //                                 },
+                            //                                 else => {},
+                            //                             };
+                            //                         },
+                            //                         else => {},
+                            //                     }
+                            //                 }
+                            //             },
+                            //             else => {},
+                            //         }
+                            //         continue;
+                            //     }
+
+                            //     if (std.ascii.eqlIgnoreCase(key, "zsets")) {
+                            //         // zsets: { "key": { "member": score, ... } }
+                            //         switch (val.*) {
+                            //             .object => |zs_map| {
+                            //                 var zit = zs_map.iterator();
+                            //                 while (zit.next()) |zent| {
+                            //                     const zset_key = zent.key_ptr.*;
+                            //                     switch (zent.value_ptr.*) {
+                            //                         .object => |members| {
+                            //                             var mit = members.iterator();
+                            //                             while (mit.next()) |m| {
+                            //                                 const member_name = m.key_ptr.*;
+                            //                                 switch (m.value_ptr.*) {
+                            //                                     .float => |f| _ = self.zadd(zset_key, member_name, f) catch {},
+                            //                                     .integer => |i| _ = self.zadd(zset_key, member_name, @floatFromInt(i)) catch {},
+                            //                                     else => {},
+                            //                                 }
+                            //                             }
+                            //                         },
+                            //                         else => {},
+                            //                     }
+                            //                 }
+                            //             },
+                            //             else => {},
+                            //         }
+                            //         continue;
+                            //     }
+                            // }
                         },
                         .number_string => |s_num| { // Handle number_string explicitly
                             std.debug.print("Warning: Number string for key '{s}' encountered, storing as string.\n", .{key});
@@ -948,7 +1077,7 @@ pub const Database = struct {
         var buf: [4096]u8 = undefined;
 
         var file_writer = file.writer(&buf);
-        const io_writer = &file_writer.interface; 
+        const io_writer = &file_writer.interface;
 
         var stringify = std.json.Stringify{
             .writer = io_writer,
@@ -1015,6 +1144,206 @@ pub const Database = struct {
             for (arr.items) |item| {
                 try jw.write(item);
             }
+        }
+
+        // -----------------------------
+        // Serialize sets
+        // -----------------------------
+        try jw.objectField("sets");
+        try jw.beginObject();
+        defer _ = jw.endObject() catch {};
+        var sit = self.sets.iterator();
+        while (sit.next()) |entry| {
+            const set_key = entry.key_ptr.*;
+            const set_map = entry.value_ptr.*;
+
+            try jw.objectField(set_key);
+            try jw.beginArray();
+            defer _ = jw.endArray() catch {};
+
+            var mit = set_map.keyIterator();
+            while (mit.next()) |member| {
+                try jw.write(member.*);
+            }
+        }
+
+        // -----------------------------
+        // Serialize zsets (sorted sets)
+        // -----------------------------
+        try jw.objectField("zsets");
+        try jw.beginObject();
+        defer _ = jw.endObject() catch {};
+
+        var zit = self.zsets.iterator();
+        while (zit.next()) |entry| {
+            const zset_key = entry.key_ptr.*;
+            const zmap = entry.value_ptr.*;
+
+            try jw.objectField(zset_key);
+            try jw.beginObject();
+            defer _ = jw.endObject() catch {};
+
+            var mit = zmap.iterator();
+            while (mit.next()) |m| {
+                const m_name = m.key_ptr.*;
+                const score = m.value_ptr.*;
+                try jw.objectField(m_name);
+                try jw.write(score);
+            }
+        }
+    }
+
+    pub fn sadd(self: *Database, key: []const u8, member: []const u8) !bool {
+        const s = self.sets.getPtr(key) orelse blk: {
+            const ns = std.StringHashMap(void).init(self.allocator);
+            try self.sets.put(try self.allocator.dupe(u8, key), ns);
+            break :blk self.sets.getPtr(key).?;
+        };
+
+        if (s.contains(member)) return false;
+        const dup_mem = try self.allocator.dupe(u8, member);
+        try s.put(dup_mem, {});
+
+        if (!self.replaying) {
+            const e = LogEntry{ .SetAdd = .{
+                .key_len = @intCast(key.len),
+                .key = key,
+                .member_len = @intCast(member.len),
+                .member = member,
+            } };
+            try e.serialize(self.log_file);
+            try self.log_file.sync();
+        }
+        return true;
+    }
+
+    pub fn srem(self: *Database, key: []const u8, member: []const u8) bool {
+        if (self.sets.getPtr(key)) |s| {
+            if (s.fetchRemove(member)) |rm| {
+                self.allocator.free(rm.key);
+                if (!self.replaying) {
+                    const e = LogEntry{ .SetRemove = .{
+                        .key_len = @intCast(key.len),
+                        .key = key,
+                        .member_len = @intCast(member.len),
+                        .member = member,
+                    } };
+                    _ = e.serialize(self.log_file) catch {};
+                    _ = self.log_file.sync() catch {};
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn smembers(self: *Database, key: []const u8, a: std.mem.Allocator) ![][]const u8 {
+        if (self.sets.getPtr(key)) |s| {
+            const out = try a.alloc([]const u8, s.count());
+            var it = s.keyIterator();
+            var i: usize = 0;
+            while (it.next()) |m| : (i += 1) out[i] = m.*;
+            return out;
+        }
+        return &[_][]const u8{};
+    }
+
+    // zset
+    pub fn zadd(self: *Database, key: []const u8, member: []const u8, score: f64) !bool {
+        const z = self.zsets.getPtr(key) orelse blk: {
+            const nz = std.StringHashMap([]const u8, f64).init(self.allocator);
+            try self.zsets.put(try self.allocator.dupe(u8, key), nz);
+            break :blk self.zsets.getPtr(key).?;
+        };
+        const dup = try self.allocator.dupe(u8, member);
+        const prior = try z.put(dup, score);
+
+        if (!self.replaying) {
+            const e = LogEntry{ .ZAdd = .{
+                .key_len = @intCast(key.len),
+                .key = key,
+                .member_len = @intCast(key.len),
+                .member = member,
+                .score = score,
+            } };
+            try e.serialize(self.log_file);
+            try self.log_file.sync();
+        }
+
+        if (prior) |p| {
+            _ = p;
+            self.allocator.free(dup);
+            return false;
+        }
+        return true;
+    }
+
+    pub fn zrem(self: *Database, key: []const u8, member: []const u8) bool {
+        if (self.zsets.getPtr(key)) |z| {
+            if (z.fetchRemove(member)) |rm| {
+                self.allocator.free(rm.key);
+                if (!self.replaying) {
+                    const e = LogEntry{ .ZRemove = .{
+                        .key_len = @intCast(key.len),
+                        .key = key,
+                        .member_len = @intCast(member.len),
+                        .member = member,
+                    } };
+                    _ = e.serialize(self.log_file) catch {};
+                    _ = self.log_file.sync() catch {};
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn zscore(self: *Database, key: []const u8, member: []const u8) ?f64 {
+        if (self.zsets.getPtr(key)) |z| {
+            return z.get(member);
+        }
+        return null;
+    }
+
+    pub fn zrange(
+        self: *Database,
+        key: []const u8,
+        start: usize,
+        stop: usize,
+        a: std.mem.Allocator,
+    ) ![][]const u8 {
+        if (self.zsets.getPtr(key)) |zset| {
+            const n = zset.count();
+            if (n == 0 or start >= n) n else stop;
+            const end = if (stop > n) n else stop;
+            const tmp = try a.alloc(struct { k: []const u8, s: f64 }, n);
+            var it = zset.iterator();
+            var i: usize = 0;
+            while (it.next()) |e| : (i += 1) tmp[i] = .{ .k = e.key_ptr.*, .s = e.value_ptr.* };
+
+            sortByAsc(tmp);
+            const out = a.alloc([]const u8, end - start);
+            for (tmp[start..end], 0..) |e, j| out[j] = e.k;
+            return out;
+        }
+        return &[_][]const u8{};
+    }
+
+    const Pair = struct {
+        k: []const u8,
+        s: f64,
+    };
+
+    fn sortByAsc(list: []Pair) void {
+        var i: usize = 1;
+        while (i < list.len) : (i += 1) {
+            const key = list[i];
+            var j: i64 = @intCast(i);
+            j -= 1;
+            while (j >= 0 and list[@intCast(j)].s >= key.s) : (j -= 1) {
+                list[@intCast(j + 1)] = list[@intCast(j)];
+            }
+            list[@intCast(j + 1)] = key;
         }
     }
 };

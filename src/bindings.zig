@@ -30,7 +30,6 @@ export fn db_create(path_ptr: [*]const u8, path_len: usize) ?DatabaseHandle {
 }
 
 export fn db_close(handle: DatabaseHandle) void {
-
     const db: *root.Database = @ptrCast(@alignCast(handle));
     db.deinit();
     allocator.destroy(db);
