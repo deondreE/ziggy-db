@@ -114,10 +114,9 @@ fn handleClient(
     var line_buf = std.array_list.Managed(u8).init(allocator);
     defer line_buf.deinit();
 
-    var reader_buf: [4096]u8 = undefined;
+    // var reader_buf: [4096]u8 = undefined;
     var writer_buf: [4096]u8 = undefined;
 
-    var reader = stream_ptr.reader(&reader_buf);
     var writer = stream_ptr.writer(&writer_buf).interface;
 
     const MAX_COMMAND_LENGTH = 1024;
@@ -131,7 +130,7 @@ fn handleClient(
 
     var recived_data: [MAX_COMMAND_LENGTH]u8 = undefined;
     while (true) {
-        _ = reader.net_stream.read(recived_data[0..]) catch |err| switch (err) {
+        _ = stream_ptr.read(recived_data[0..]) catch |err| switch (err) {
             else => {
                 std.debug.print("handleClient: Read error in loop: {s}\n", .{@errorName(err)});
                 return;
