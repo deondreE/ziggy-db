@@ -64,10 +64,10 @@ fn handleClient(
         stream.close();
     }
 
-    var read_buf: [1024]u8 = undefined;
+    // var read_buf: [1024]u8 = undefined;
     var write_buf: [1024]u8 = undefined;
 
-    var reader = stream.reader(&read_buf);
+    // var reader = stream.reader(&read_buf);
     var writer = stream.writer(&write_buf);
 
     _ = writer.interface.writeAll("Welcome to ZiggyDB!\n") catch |err| {
@@ -79,7 +79,7 @@ fn handleClient(
     var cmd_buf: [MAX_CMD]u8 = undefined;
 
     while (true) {
-        const bytes_read = reader.net_stream.read(&cmd_buf) catch |err| switch (err) {
+        const bytes_read = stream.read(&cmd_buf) catch |err| switch (err) {
             error.ConnectionResetByPeer, error.SocketNotConnected, error.BrokenPipe => {
                 std.debug.print("Client disconnected.\n", .{});
                 return;
