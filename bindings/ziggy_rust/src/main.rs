@@ -4,7 +4,7 @@ use std::net::TcpStream;
 const SERVER_IP: &str = "127.0.0.1";
 const SERVER_PORT: u16 = 8080;
 const BUFFER_SIZE: usize = 4096;
-const TIMEOUT_SECS: u64 = 10;
+const TIMEOUT_SECS: u64 = 3;
 
 fn send_and_receive(stream: &mut TcpStream, command: &str) -> io::Result<()> {
     let mut command_with_newline = String::from(command);
