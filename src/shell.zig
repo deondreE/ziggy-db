@@ -479,7 +479,7 @@ pub fn main() !void {
                 }
                 try stdout.print("{d} member(s) added\n", .{added});
             },
-            .srem => {
+            .serem => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
                     continue :shell_loop;
@@ -491,7 +491,7 @@ pub fn main() !void {
                 }
                 try stdout.print("{d} member(s) removed\n", .{removed});
             },
-            .smemebers => {
+            .smembers => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
                     continue :shell_loop;
@@ -526,7 +526,7 @@ pub fn main() !void {
                 const added = try db.zadd(key, member, score);
                 if (added) try stdout.print("Added {s} (score {d:.2})\n", .{ member, score }) else try stdout.print("Updated {s} (score {d:.2})\n", .{ member, score });
             },
-            .srem => {
+            .zrem => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
                     continue :shell_loop;
@@ -539,6 +539,21 @@ pub fn main() !void {
                 try stdout.print("{d} member(s) removed\n", .{removed});
             },
             .zscore => {
+                const key = toks.next() orelse {
+                    try stdout.print("Missing key\n", .{});
+                    continue :shell_loop;
+                };
+                const member = toks.next() orelse {
+                    try stdout.print("Missing member\n", .{});
+                    continue :shell_loop;
+                };
+                if (db.zscore(key, member)) |score| {
+                    try stdout.print("{d:.2}\n", .{score});
+                } else {
+                    try stdout.print("(nil)\n", .{});
+                }
+            },
+            .zrange => {
                 const key = toks.next() orelse {
                     try stdout.print("Missing key\n", .{});
                     continue :shell_loop;

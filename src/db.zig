@@ -1251,12 +1251,12 @@ pub const Database = struct {
     // zset
     pub fn zadd(self: *Database, key: []const u8, member: []const u8, score: f64) !bool {
         const z = self.zsets.getPtr(key) orelse blk: {
-            const nz = std.StringHashMap([]const u8, f64).init(self.allocator);
+            const nz = std.StringHashMap(f64).init(self.allocator);
             try self.zsets.put(try self.allocator.dupe(u8, key), nz);
             break :blk self.zsets.getPtr(key).?;
         };
         const dup = try self.allocator.dupe(u8, member);
-        const prior = try z.put(dup, score);
+        const prior = try z.fetchPut(dup, score);
 
         if (!self.replaying) {
             const e = LogEntry{ .ZAdd = .{
@@ -1314,16 +1314,20 @@ pub const Database = struct {
     ) ![][]const u8 {
         if (self.zsets.getPtr(key)) |zset| {
             const n = zset.count();
-            if (n == 0 or start >= n) n else stop;
+            if (n == 0 or start >= n)
+                return &[_][]const u8{};
+
             const end = if (stop > n) n else stop;
-            const tmp = try a.alloc(struct { k: []const u8, s: f64 }, n);
+            const tmp = try a.alloc(Pair, n);
+
             var it = zset.iterator();
             var i: usize = 0;
             while (it.next()) |e| : (i += 1) tmp[i] = .{ .k = e.key_ptr.*, .s = e.value_ptr.* };
 
             sortByAsc(tmp);
-            const out = a.alloc([]const u8, end - start);
-            for (tmp[start..end], 0..) |e, j| out[j] = e.k;
+            const out = try a.alloc([]const u8, end - start);
+            for (tmp[start..end], 0..) |e, j|
+                out[j] = e.k;
             return out;
         }
         return &[_][]const u8{};

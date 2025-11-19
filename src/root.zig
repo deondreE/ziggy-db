@@ -33,7 +33,8 @@ pub const Command = enum {
     importjson,
     exportjson,
     sadd,
-    srem,
+    serem,
+    smembers,
     zrange,
     zscore,
     zadd,
@@ -60,7 +61,7 @@ pub fn parseCommand(tok: []const u8) Command {
     if (std.ascii.eqlIgnoreCase(tok, "IMPORTJSON")) return .importjson;
     if (std.ascii.eqlIgnoreCase(tok, "EXPORTJSON")) return .exportjson;
     if (std.ascii.eqlIgnoreCase(tok, "SADD")) return .sadd;
-    if (std.ascii.eqlIgnoreCase(tok, "SREM")) return .srem;
+    if (std.ascii.eqlIgnoreCase(tok, "SREM")) return .serem;
     if (std.ascii.eqlIgnoreCase(tok, "SMEMBERS")) return .smembers;
     if (std.ascii.eqlIgnoreCase(tok, "ZADD")) return .zadd;
     if (std.ascii.eqlIgnoreCase(tok, "ZREM")) return .zrem;
