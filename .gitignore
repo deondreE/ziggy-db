@@ -6,3 +6,4 @@ tests
 data.json
 target
 cmake*
+*.dll

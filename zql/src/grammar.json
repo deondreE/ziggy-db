@@ -1435,14 +1435,7 @@
       "name": "comment"
     }
   ],
-  "conflicts": [
-    [
-      "unary_expression"
-    ],
-    [
-      "from_source"
-    ]
-  ],
+  "conflicts": [["unary_expression"], ["from_source"]],
   "precedences": [],
   "externals": [],
   "inline": [],

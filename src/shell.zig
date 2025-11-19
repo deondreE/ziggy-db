@@ -434,7 +434,7 @@ pub fn main() !void {
                 }
                 try stdout.print("Starting server on port {any}...\n", .{port});
 
-                try server.startTcpServer(db, port, alloc);
+                try server.startTcpServer(&db, port, alloc);
 
                 // If server stops due to an erorr program will reset here.
                 try stdout.print("Server stopped.\n", .{});

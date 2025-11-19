@@ -1,56 +1,68 @@
 import socket
-from time import sleep
+import sys
+import time
 
 SERVER_IP = "127.0.0.1"
 SERVER_PORT = 8080
-BUFFER_SIZE = 1024
+BUFFER_SIZE = 4096
 
 
-def connect_to_tcp_server(ip, port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+def send_and_receive(sock: socket.socket, command: str):
+    """Send a line to the server and print its response."""
+    if not command.endswith("\n"):
+        command += "\n"
+
+    print(f"\n>>> {command.strip()}")
+    sock.sendall(command.encode("utf-8"))
+
+    try:
+        response = sock.recv(BUFFER_SIZE)
+        if response:
+            print("<<<", response.decode("utf-8", errors="replace").strip())
+        else:
+            print("(no response)")
+    except socket.timeout:
+        print("(timeout waiting for response)")
+
+
+def connect_to_ziggy(ip: str, port: int):
+    """Connect to ZiggyDB TCP server and run a small test sequence."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(3)
         try:
-            print(f"Connecting to {ip}:{port}...")
-            client_socket.connect((ip, port))
-            print("Connected! Waiting for initial server message...\n")
-
-            # First, print the server greeting
-            initial = client_socket.recv(BUFFER_SIZE)
-            if initial:
-                print("Server:", initial.decode("utf-8", errors="replace").strip())
-
-            # Send our command to the server
-            cmd = 'SET data "data"\n'
-            print(f"Sending command: {cmd.strip()}")
-            client_socket.sendall(cmd.encode("utf-8"))
-
-            # Wait for a response from the server
-            response = client_socket.recv(BUFFER_SIZE)
-            if response:
-                print("Server:", response.decode("utf-8", errors="replace").strip())
-            else:
-                print("No response from server.")
-
-            # Optional: Keep listening for additional messages
-            print("\nListening for more messages (Ctrl+C to exit)...")
-            while True:
-                data = client_socket.recv(BUFFER_SIZE)
-                if not data:
-                    print("Server closed the connection.")
-                    break
-                print("Server:", data.decode("utf-8", errors="replace").strip())
-                sleep(0.1)
-
+            print(f"Connecting to {ip}:{port} ...")
+            s.connect((ip, port))
         except ConnectionRefusedError:
-            print(f"Error: Connection refused. Is the server running on {ip}:{port}?")
-        except socket.timeout:
-            print("Error: Connection timed out.")
-        except KeyboardInterrupt:
-            print("\nDisconnected by user.")
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-        finally:
-            print("Connection closed.")
+            print(f"Connection refused. Is the ZiggyDB server running on {ip}:{port}?")
+            sys.exit(1)
+
+        # initial server greeting
+        greeting = s.recv(BUFFER_SIZE)
+        if greeting:
+            print(greeting.decode("utf-8", errors="replace").strip())
+
+        # test sequence
+        send_and_receive(s, "SET foo bar")
+        send_and_receive(s, "GET foo")
+        send_and_receive(s, "SET x 42")
+        send_and_receive(s, "GET x")
+        send_and_receive(s, "DEL x")
+        send_and_receive(s, "GET x")
+        send_and_receive(s, "BEGIN")
+        send_and_receive(s, "SET txn 99")
+        send_and_receive(s, "COMMIT")
+        send_and_receive(s, "GET txn")
+
+        # exit the session cleanly
+        send_and_receive(s, "EXIT")
+
+        print("\nTest sequence complete. Closing connection.")
+        try:
+            s.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        s.close()
 
 
 if __name__ == "__main__":
-    connect_to_tcp_server(SERVER_IP, SERVER_PORT)
+    connect_to_ziggy(SERVER_IP, SERVER_PORT)

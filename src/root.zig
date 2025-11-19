@@ -9,6 +9,12 @@ pub const Database = @import("db.zig").Database;
 pub const ValueWithMetadata = @import("db.zig").ValueWithMetadata;
 pub const printValue = @import("db.zig").printValue;
 
+pub fn fuzzAssert(condition: bool, comptime message: []const u8) void {
+    if (!condition) {
+        std.debug.panic("Fuzz Assertion Failed: {s}\n", .{message});
+    }
+}
+
 pub const Command = enum {
     help,
     set,
