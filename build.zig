@@ -9,7 +9,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    
+
     const mod = b.addModule("testing_zig", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -23,12 +23,22 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
 
-            .imports = &.{
-                .{ .name = "testing_zig", .module = mod }
-            },
+            .imports = &.{.{ .name = "testing_zig", .module = mod }},
         }),
     });
+
+    const exe_2 = b.addExecutable(.{
+        .name = "ziggy_cold",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cold/shell.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "testing_zig", .module = mod }},
+        }),
+    });
+
     b.installArtifact(exe);
+    b.installArtifact(exe_2);
 
     const bindings_lib = b.addLibrary(.{
         .name = "ziggy_bindings",
@@ -42,9 +52,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    _ =bindings_lib.getEmittedH();
-   b.installArtifact(bindings_lib);
-    
+    _ = bindings_lib.getEmittedH();
+    b.installArtifact(bindings_lib);
+
     const is_release =
         optimize == .ReleaseSafe or
         optimize == .ReleaseFast or
